@@ -107,12 +107,23 @@ let mast_context ic = object (self)
     val patts = backlist ()
 
     method private input_expr_ref = fst (exprs#get (Z.to_int (input_varint ic)))
+    method private input_exprs = let l = Z.to_int (input_varint ic) in
+        List.init l (fun _ -> self#input_expr_ref)
     method private input_expr c = match c with
         | 'L' -> (match input_char ic with
             | 'N' -> NullExpr
+            | 'S' -> StringExpr (input_str ic)
             |  x  -> throw_invalid_mast ic x "literal"
         )
         | 'N' -> NounExpr (input_str ic)
+        | 'B' -> BindingExpr (input_str ic)
+        | 'C' -> let t = self#input_expr_ref in
+            let v = input_str ic in
+            let a = self#input_exprs in
+            let l = Z.to_int (input_varint ic) in
+            let na = List.init l
+                (fun _ -> (self#input_expr_ref, self#input_expr_ref)) in
+            CallExpr (t, v, a, na)
         |  x  -> throw_invalid_mast ic x "input_expr"
     method private input_patt = match input_char ic with
         | 'I' -> IgnorePattern self#input_expr_ref
@@ -149,3 +160,13 @@ let read_mast filename =
     let rv = context#input_last_expr in
     close_in ic;
     rv;;
+
+module Dict = Map.Make(String);;
+
+exception UserException;;
+let compile_monte ast = match ast with
+    | NullExpr -> fun c -> nullObj
+    | BindingExpr n -> (fun c -> match Dict.find_opt n c with
+        | Some b -> b
+        | None   -> raise UserException)
+;;
