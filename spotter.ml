@@ -8,35 +8,13 @@ type monte = <
     stringOf : string;
 >;;
 
-let nullObj : monte = object
-    method call verb args namedArgs = None
-    method stringOf = "<null>"
-end;;
-
-let rec intObj i : monte = object
-    method call verb args namedArgs = match (verb, args) with
-        | ("next", []) -> Some (intObj (i + 1))
-        | ("previous", []) -> Some (intObj (i - 1))
-        | _ -> None
-    method stringOf = string_of_int i
-end;;
-
-exception Refused of (string * monte list * monte list);;
-
-let call_exn target verb args namedArgs : monte =
-    match target#call verb args namedArgs with
-        | Some rv -> rv
-        | None -> raise (Refused (verb, args, (List.map fst namedArgs)));;
-
-let prettyPrint formatter obj = Format.pp_print_string formatter obj#stringOf;;
-
 type
 mastexpr = NullExpr
          | LiteralExpr of monte
          | CharExpr of string
          | DoubleExpr of float
          | IntExpr of Z.t
-         | StringExpr of string
+         | StrExpr of string
          | NounExpr of string
          | BindingExpr of string
          | SeqExpr of mastexpr list
@@ -112,11 +90,12 @@ let mast_context ic = object (self)
     method private input_expr c = match c with
         | 'L' -> (match input_char ic with
             | 'N' -> NullExpr
-            | 'S' -> StringExpr (input_str ic)
+            | 'S' -> StrExpr (input_str ic)
             |  x  -> throw_invalid_mast ic x "literal"
         )
         | 'N' -> NounExpr (input_str ic)
         | 'B' -> BindingExpr (input_str ic)
+        | 'S' -> SeqExpr self#input_exprs
         | 'C' -> let t = self#input_expr_ref in
             let v = input_str ic in
             let a = self#input_exprs in
@@ -124,6 +103,7 @@ let mast_context ic = object (self)
             let na = List.init l
                 (fun _ -> (self#input_expr_ref, self#input_expr_ref)) in
             CallExpr (t, v, a, na)
+        | 'H' -> HideExpr self#input_expr_ref
         |  x  -> throw_invalid_mast ic x "input_expr"
     method private input_patt = match input_char ic with
         | 'I' -> IgnorePattern self#input_expr_ref
@@ -163,10 +143,79 @@ let read_mast filename =
 
 module Dict = Map.Make(String);;
 
+let nullObj : monte = object
+    method call verb args namedArgs = None
+    method stringOf = "<null>"
+end;;
+
+let rec intObj i : monte = object
+    method call verb args namedArgs = match (verb, args) with
+        | ("next", []) -> Some (intObj (Z.succ i))
+        | ("previous", []) -> Some (intObj (Z.pred i))
+        | _ -> None
+    method stringOf = Z.to_string i
+end;;
+
+let rec strObj s : monte = object
+    method call verb args namedArgs = match (verb, args) with
+        | ("size", []) -> Some (intObj (Z.of_int (UTF8.length s)))
+        | _ -> None
+    (* XXX needs quotes and escapes *)
+    method stringOf = s
+end;;
+
+let rec listObj l : monte = object
+    method call verb args namedArgs = match (verb, args) with
+        | ("size", []) -> Some (intObj (Z.of_int (List.length l)))
+        | _ -> None
+    method stringOf = "[" ^ (String.concat " " (List.map (fun o -> o#stringOf) l)) ^ "]"
+end;;
+
+let bindingObj slot : monte = object
+    method call verb args namedArgs = match (verb, args) with
+        | ("get", []) -> Some slot
+        | _ -> None
+    method stringOf = "<binding>"
+end;;
+
+let finalSlotObj value : monte = object
+    method call verb args namedArgs = match (verb, args) with
+        | ("get", []) -> Some value
+        | _ -> None
+    method stringOf = "<final slot>"
+end;;
+
+let varSlotObj value : monte = object
+    val mutable cell = value
+    method call verb args namedArgs = match (verb, args) with
+        | ("get", []) -> Some cell
+        | ("put", [v]) -> cell <- v; Some nullObj
+        | _ -> None
+    method stringOf = "<var slot>"
+end;;
+
+exception Refused of (string * monte list * monte list);;
+
+let call_exn target verb args namedArgs : monte =
+    match target#call verb args namedArgs with
+        | Some rv -> rv
+        | None -> raise (Refused (verb, args, (List.map fst namedArgs)));;
+let calling verb args namedArgs target = call_exn target verb args namedArgs;;
+
+let prettyPrint formatter obj = Format.pp_print_string formatter obj#stringOf;;
+
 exception UserException;;
-let compile_monte ast = match ast with
-    | NullExpr -> fun c -> nullObj
+let rec compile_monte ast = match ast with
+    | NullExpr -> fun _ -> nullObj
+    | IntExpr i -> fun _ -> intObj i
+    | StrExpr s -> fun _ -> strObj s
+    | NounExpr n -> (fun c -> match Dict.find_opt n c with
+        | Some b -> call_exn b "get" [] []
+        | None   -> raise UserException)
     | BindingExpr n -> (fun c -> match Dict.find_opt n c with
         | Some b -> b
         | None   -> raise UserException)
+    | SeqExpr exprs -> let statements = List.map compile_monte exprs in (fun c ->
+        List.fold_left (fun _ s -> s c) nullObj statements)
+    | HideExpr expr -> compile_monte expr
 ;;
