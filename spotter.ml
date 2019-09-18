@@ -44,7 +44,7 @@ mastpatt = IgnorePattern of mastexpr
          | VarPattern of (string * mastexpr)
          | ListPattern of mastpatt list
          | ViaPattern of (mastexpr * mastpatt)
-         | BindingPatt of string
+         | BindingPattern of string
 ;;
 
 exception InvalidMAST of (string * char * int);;
@@ -78,7 +78,13 @@ let backlist () = object
     method tl = List.hd l
 end;;
 
+(* MAST stores exprs, methods, and matchers all on one single stack. *)
+type masthack = HExpr of mastexpr
+              | HMeth of mastmethod
+              | HMatch of mastmatcher;;
+
 let mast_context ic = object (self)
+
     (* Compared to the classic MAST context, we store the exprs and patts
      * backwards, so that we can build them quickly. *)
     val exprs = backlist ()
@@ -87,6 +93,11 @@ let mast_context ic = object (self)
     method private input_expr_ref = fst (exprs#get (Z.to_int (input_varint ic)))
     method private input_exprs = let l = Z.to_int (input_varint ic) in
         List.init l (fun _ -> self#input_expr_ref)
+    method private input_patt_ref = fst (patts#get (Z.to_int (input_varint ic)))
+    method private input_patts = let l = Z.to_int (input_varint ic) in
+        List.init l (fun _ -> self#input_patt_ref)
+    method private input_block = let p = self#input_patt_ref in
+        (p, self#input_expr_ref)
     method private input_expr c = match c with
         | 'L' -> (match input_char ic with
             | 'N' -> NullExpr
@@ -103,12 +114,36 @@ let mast_context ic = object (self)
             let na = List.init l
                 (fun _ -> (self#input_expr_ref, self#input_expr_ref)) in
             CallExpr (t, v, a, na)
+        | 'D' -> let p = self#input_patt_ref in
+            let ex = self#input_expr_ref in
+            DefExpr (p, ex, self#input_expr_ref)
+        | 'e' -> EscapeExpr self#input_block
+        | 'E' -> let (bp, be) = self#input_block in
+            let (cp, ce) = self#input_block in
+            EscapeCatchExpr (bp, be, cp, ce)
+        | 'A' -> let target = input_str ic in
+            AssignExpr (target, self#input_expr_ref)
+        | 'F' -> let body = self#input_expr_ref in
+            FinallyExpr (body, self#input_expr_ref)
+        | 'Y' -> let body = self#input_expr_ref in
+            let (p, c) = self#input_block in
+            TryExpr (body, p, c)
         | 'H' -> HideExpr self#input_expr_ref
+        | 'I' -> let test = self#input_expr_ref in
+            let cons = self#input_expr_ref in
+            let alt = self#input_expr_ref in
+            IfExpr (test, cons, alt)
+        | 'T' -> MetaStateExpr
+        | 'X' -> MetaContextExpr
         |  x  -> throw_invalid_mast ic x "input_expr"
     method private input_patt = match input_char ic with
         | 'I' -> IgnorePattern self#input_expr_ref
         | 'F' -> let n = input_str ic in FinalPattern (n, self#input_expr_ref)
         | 'V' -> let n = input_str ic in VarPattern (n, self#input_expr_ref)
+        | 'L' -> ListPattern self#input_patts
+        | 'A' -> let trans = self#input_expr_ref in
+            ViaPattern (trans, self#input_patt_ref)
+        | 'B' -> BindingPattern (input_str ic)
         |  x  -> throw_invalid_mast ic x "input_patt"
     method private input_expr_and_span c =
         let e = self#input_expr c in (e, input_span ic)
