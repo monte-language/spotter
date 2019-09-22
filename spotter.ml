@@ -179,6 +179,18 @@ module Compiler = struct
         | Ejecting (o, s) -> o
     let assignExpr name rhs span = fun env -> Dict.add name (rhs env) env
     let hideExpr expr _ = expr
+    let ignorePatt guard span = fun env specimen exit ->
+        call_exn guard "coerce" [specimen; exit] []
+    let finalPatt noun guard span = fun env specimen exit ->
+        let s = call_exn guard "coerce" [specimen; exit] [] in
+        (* XXX guards *)
+        Dict.add noun (finalSlotObj s) env
+    let varPatt noun guard span = fun env specimen exit ->
+        let s = call_exn guard "coerce" [specimen; exit] [] in
+        (* XXX guards *)
+        Dict.add noun (varSlotObj s) env
+    let bindingPatt noun span = fun env specimen exit ->
+        Dict.add noun specimen env
 end;;
 
 let input_str ic = really_input_string ic (Z.to_int (input_varint ic));;
