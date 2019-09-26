@@ -118,10 +118,16 @@ end;;
 
 exception Refused of (string * monte list * monte list);;
 
+(* The main calling interface. Handles Miranda methods. Propagates exceptions
+ * on failure. *)
 let call_exn target verb args namedArgs : monte =
     match target#call verb args namedArgs with
         | Some rv -> rv
-        | None -> raise (Refused (verb, args, (List.map fst namedArgs)));;
+        | None -> match (verb, args) with
+            (* Miranda behaviors. *)
+            | ("_sealedDispatch", [_]) -> nullObj
+            | ("_uncall", [])          -> nullObj
+            | _                        -> raise (Refused (verb, args, (List.map fst namedArgs)));;
 let calling verb args namedArgs target = call_exn target verb args namedArgs;;
 let get = calling "get" [] [];;
 
