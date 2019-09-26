@@ -6,7 +6,10 @@ type monte = <
         -> (monte * monte) list
         -> monte option;
     stringOf : string;
->;;
+    unwrap : monteprim option;
+>
+and monteprim = MNull | MInt of Z.t | MStr of string | MList of monte list;;
+
 
 module type MAST = sig
     type span
@@ -58,6 +61,7 @@ module Dict = Map.Make(String);;
 let nullObj : monte = object
     method call verb args namedArgs = None
     method stringOf = "<null>"
+    method unwrap = Some MNull
 end;;
 
 let rec intObj i : monte = object
@@ -66,6 +70,7 @@ let rec intObj i : monte = object
         | ("previous", []) -> Some (intObj (Z.pred i))
         | _ -> None
     method stringOf = Z.to_string i
+    method unwrap = Some (MInt i)
 end;;
 
 let rec strObj s : monte = object
@@ -74,6 +79,7 @@ let rec strObj s : monte = object
         | _ -> None
     (* XXX needs quotes and escapes *)
     method stringOf = s
+    method unwrap = Some (MStr s)
 end;;
 
 let rec listObj l : monte = object
@@ -81,6 +87,7 @@ let rec listObj l : monte = object
         | ("size", []) -> Some (intObj (Z.of_int (List.length l)))
         | _ -> None
     method stringOf = "[" ^ (String.concat " " (List.map (fun o -> o#stringOf) l)) ^ "]"
+    method unwrap = Some (MList l)
 end;;
 
 let bindingObj slot : monte = object
@@ -88,6 +95,7 @@ let bindingObj slot : monte = object
         | ("get", []) -> Some slot
         | _ -> None
     method stringOf = "<binding>"
+    method unwrap = None
 end;;
 
 let finalSlotObj value : monte = object
@@ -95,6 +103,7 @@ let finalSlotObj value : monte = object
         | ("get", []) -> Some value
         | _ -> None
     method stringOf = "<final slot>"
+    method unwrap = None
 end;;
 
 let varSlotObj value : monte = object
@@ -104,6 +113,7 @@ let varSlotObj value : monte = object
         | ("put", [v]) -> cell <- v; Some nullObj
         | _ -> None
     method stringOf = "<var slot>"
+    method unwrap = None
 end;;
 
 exception Refused of (string * monte list * monte list);;
@@ -127,8 +137,8 @@ let input_varint ic =
 exception InvalidMAST of (string * int);;
 let throw_invalid_mast ic message = raise (InvalidMAST (message, pos_in ic))
 
-type span = OneToOne of (Z.t * Z.t * Z.t * Z.t)
-          | Blob of (Z.t * Z.t * Z.t * Z.t)
+type mspan = OneToOne of (Z.t * Z.t * Z.t * Z.t)
+           | Blob of (Z.t * Z.t * Z.t * Z.t)
 ;;
 let input_span ic = match input_char ic with
     | 'S' -> OneToOne (input_varint ic, input_varint ic, input_varint ic, input_varint ic)
@@ -141,7 +151,7 @@ let string_of_span span =
     | OneToOne t -> "str:" ^ sos t
     | Blob     t -> "blob:" ^ sos t
 
-exception Ejecting of (monte * span);;
+exception Ejecting of (monte * mspan);;
 let ejectTo span : monte = object (self)
     val mutable thrown = false
     method private throw v = thrown <- true; raise (Ejecting (v, span))
@@ -150,10 +160,26 @@ let ejectTo span : monte = object (self)
         | ("run", [])  -> self#throw nullObj
         | _            -> None
     method stringOf = "<ejector at " ^ string_of_span span ^ ">"
+    method unwrap = None
 end;;
 
-exception UserException of span;;
+exception WrongType;;
+let unwrapList specimen = match specimen#unwrap with
+    | Some (MList l) -> l
+    | _              -> raise WrongType
+
+exception UserException of mspan;;
 module Compiler = struct
+    type span = mspan
+    let oneToOne t = OneToOne t
+    let blob t = Blob t
+    type t = monte Dict.t -> monte
+    type patt = monte Dict.t -> monte -> monte -> monte Dict.t
+    type narg = monte Dict.t -> (monte * monte)
+    type nparam = monte Dict.t -> (monte * monte) list -> monte
+        -> monte Dict.t
+    type meth = (string * patt list * nparam list * t)
+    type matcher = (patt * t)
     let nullExpr _ = fun _ -> nullObj
     let intExpr i _ = fun _ -> intObj i
     let strExpr s _ = fun _ -> strObj s
@@ -177,7 +203,20 @@ module Compiler = struct
     let escapeExpr patt body span = fun env -> let ej = ejectTo span in
         try body (patt env ej nullObj span) with
         | Ejecting (o, s) -> o
+    let objectExpr doc namePatt asExpr auditors meths matchs span =
+        fun env -> object (self)
+            (* XXX method dispatch, matcher dispatch *)
+            method call verb args namedArgs = None
+            (* XXX miranda methods *)
+            (* XXX call printOn *)
+            method stringOf = "<user>"
+            method unwrap = None
+        end
     let assignExpr name rhs span = fun env -> Dict.add name (rhs env) env
+    let tryExpr body patt catcher span = fun env ->
+        (* XXX sealed *)
+        try body env with
+            | UserException _ -> catcher (patt env nullObj nullObj span)
     let hideExpr expr _ = expr
     let ignorePatt guard span = fun env specimen exit ->
         call_exn guard "coerce" [specimen; exit] []
@@ -189,6 +228,11 @@ module Compiler = struct
         let s = call_exn guard "coerce" [specimen; exit] [] in
         (* XXX guards *)
         Dict.add noun (varSlotObj s) env
+    let listPatt patts span = fun env specimen exit ->
+        let specimens = unwrapList specimen in
+        List.fold_left2 (fun e p s -> p e s exit) env patts specimens
+    let viaPatt trans patt span = fun env specimen exit ->
+        patt env (call_exn trans "run" [specimen; exit] []) exit
     let bindingPatt noun span = fun env specimen exit ->
         Dict.add noun specimen env
 end;;
