@@ -157,10 +157,12 @@ let string_of_span span =
     | OneToOne t -> "str:" ^ sos t
     | Blob     t -> "blob:" ^ sos t
 
-exception Ejecting of (monte * mspan);;
+exception Ejecting of (monte * monte);;
+exception DoubleThrown;;
 let ejectTo span : monte = object (self)
     val mutable thrown = false
-    method private throw v = thrown <- true; raise (Ejecting (v, span))
+    method private throw v = if thrown then raise DoubleThrown;
+        thrown <- true; raise (Ejecting (v, self))
     method call verb args namedArgs = match (verb, args) with
         | ("run", [v]) -> self#throw v
         | ("run", [])  -> self#throw nullObj
@@ -208,7 +210,7 @@ module Compiler = struct
         patt env (expr env) (exit env) span
     let escapeExpr patt body span = fun env -> let ej = ejectTo span in
         try body (patt env ej nullObj span) with
-        | Ejecting (o, s) -> o
+        | Ejecting (o, thrower) when thrower == ej -> o
     let objectExpr doc namePatt asExpr auditors meths matchs span =
         fun env -> object (self)
             (* XXX method dispatch, matcher dispatch *)
