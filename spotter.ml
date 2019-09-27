@@ -199,8 +199,7 @@ module Compiler = struct
     type t = monte Dict.t -> monte
     type patt = monte Dict.t -> monte -> monte -> monte Dict.t
     type narg = monte Dict.t -> (monte * monte)
-    type nparam = monte Dict.t -> (monte * monte) list -> monte
-        -> monte Dict.t
+    type nparam = monte Dict.t -> (monte * monte) list -> monte Dict.t
     type meth = (string * patt list * nparam list * t)
     type matcher = (patt * t)
     let nullExpr _ = fun _ -> nullObj
@@ -219,17 +218,18 @@ module Compiler = struct
     let callExpr target verb args namedArgs span = fun env ->
         let t = target env in
         let a = List.map (fun f -> f env) args in
-        let na = List.map (fun (d, e) -> (d env, e env)) in
+        let na = List.map (fun d -> d env) namedArgs in
         match t#call verb a na with
             | Some o -> o
             | None   -> raise (UserException span)
     let defExpr patt exit expr span = fun env ->
-        patt env (expr env) (exit env) span
+        (* XXX clearly we don't thread state correctly! *)
+        let rv = expr env in patt env (expr env) (exit env); rv
     let escapeExpr patt body span = fun env -> let ej = ejectTo span in
-        try body (patt env ej nullObj span) with
+        try body (patt env ej nullObj) with
         | Ejecting (o, thrower) when thrower == ej -> o
     let escapeCatchExpr patt body cpatt cbody span = fun env -> let ej = ejectTo span in
-        try body (patt env ej nullObj span) with
+        try body (patt env ej nullObj) with
         | Ejecting (o, thrower) when thrower == ej ->
                 cbody (cpatt env o nullObj)
     let objectExpr doc namePatt asExpr auditors meths matchs span =
@@ -241,30 +241,57 @@ module Compiler = struct
             method stringOf = "<user>"
             method unwrap = None
         end
-    let assignExpr name rhs span = fun env -> Dict.add name (rhs env) env
+    let assignExpr name rhs span = fun env ->
+        let rv = rhs env in Dict.add name rv env; rv
     let tryExpr body patt catcher span = fun env ->
         (* XXX sealed *)
         try body env with
-            | UserException _ -> catcher (patt env nullObj nullObj span)
+            | UserException _ -> catcher (patt env nullObj nullObj)
+    let finallyExpr body unwinder span = fun env ->
+        try body env with
+            (* XXX this would not need duplication if factored into a
+             * subvariant somehow *)
+            | UserException s -> unwinder env; raise (UserException s)
+            | Ejecting p      -> unwinder env; raise (Ejecting p)
     let hideExpr expr _ = expr
     let ifExpr test alt cons span = fun env -> match (test env)#unwrap with
-        | MBool b -> if b then alt env else cons env
-        | _       -> UserException span
+        | Some (MBool b) -> if b then alt env else cons env
+        | _              -> raise (UserException span)
+    let metaStateExpr span = fun env -> object
+        method call verb args namedArgs = None
+        method stringOf = "<meta.getState()>"
+        method unwrap = None
+    end
+    let metaContextExpr span = fun env -> object
+        method call verb args namedArgs = None
+        method stringOf = "<meta.context()>"
+        method unwrap = None
+    end
+    let metho doc verb patts nparams rguard body span =
+        (* XXX rguard? signature synthesis? *)
+        (verb, patts, nparams, body)
+    let matche patt body span = (patt, body)
+    let namedArg key value span = fun env -> (key env, value env)
+    let namedParam key patt default span = fun env map ->
+        (* XXX uses OCaml equality!! *)
+        match List.assoc_opt (key env) map with
+            | Some value -> patt env value nullObj
+            | None       -> default env; env
     let ignorePatt guard span = fun env specimen exit ->
-        call_exn guard "coerce" [specimen; exit] []
+        call_exn (guard env) "coerce" [specimen; exit] []; env
     let finalPatt noun guard span = fun env specimen exit ->
-        let s = call_exn guard "coerce" [specimen; exit] [] in
+        let s = call_exn (guard env) "coerce" [specimen; exit] [] in
         (* XXX guards *)
         Dict.add noun (finalSlotObj s) env
     let varPatt noun guard span = fun env specimen exit ->
-        let s = call_exn guard "coerce" [specimen; exit] [] in
+        let s = call_exn (guard env) "coerce" [specimen; exit] [] in
         (* XXX guards *)
         Dict.add noun (varSlotObj s) env
     let listPatt patts span = fun env specimen exit ->
         let specimens = unwrapList specimen in
         List.fold_left2 (fun e p s -> p e s exit) env patts specimens
     let viaPatt trans patt span = fun env specimen exit ->
-        patt env (call_exn trans "run" [specimen; exit] []) exit
+        patt env (call_exn (trans env) "run" [specimen; exit] []) exit
     let bindingPatt noun span = fun env specimen exit ->
         Dict.add noun specimen env
 end;;
@@ -389,7 +416,7 @@ module M = MASTContext(Compiler);;
 
 let read_mast filename =
     let ic = open_in_mast filename in
-    let context = M.make ic in
-    let rv = context#input_last_expr in
+    let context = M.make in
+    let rv = context#eat_last_expr ic in
     close_in ic;
     rv;;
