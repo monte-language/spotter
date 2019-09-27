@@ -1,5 +1,7 @@
 open CamomileLibraryDefault.Camomile;;
 
+let logged label ch = Printf.printf "%s%c..." label ch; ch;;
+
 type monte = <
     call : string
         -> monte list
@@ -161,7 +163,7 @@ let throw_invalid_mast ic message = raise (InvalidMAST (message, pos_in ic))
 type mspan = OneToOne of (Z.t * Z.t * Z.t * Z.t)
            | Blob of (Z.t * Z.t * Z.t * Z.t)
 ;;
-let input_span ic = match input_char ic with
+let input_span ic = match (logged "Span tag" (input_char ic)) with
     | 'S' -> OneToOne (input_varint ic, input_varint ic, input_varint ic, input_varint ic)
     | 'B' -> Blob (input_varint ic, input_varint ic, input_varint ic, input_varint ic)
     |  _  -> throw_invalid_mast ic "input_span"
@@ -322,15 +324,23 @@ let open_in_mast path = let ic = open_in_bin path in
 module MASTContext (Monte : MAST) = struct
     type masthack = HExpr of Monte.t | HMeth of Monte.meth | HMatch of Monte.matcher
 
+    let v4 ic =
+      let i1 = input_varint ic in
+      let i2 = input_varint ic in
+      let i3 = input_varint ic in
+      let i4 = input_varint ic in
+      Printf.printf "i4:%s,%s,%s,%s\n" (Z.to_string i1) (Z.to_string i2) (Z.to_string i3) (Z.to_string i4);
+      (i1, i2, i3, i4)
+
     let make = object (self)
         (* Compared to the classic MAST context, we store the exprs and patts
          * backwards, so that we can build them quickly. *)
         val exprs = backlist ()
         val patts = backlist ()
 
-        method private eat_span ic = match input_char ic with
-            | 'S' -> Monte.oneToOne (input_varint ic, input_varint ic, input_varint ic, input_varint ic)
-            | 'B' -> Monte.blob (input_varint ic, input_varint ic, input_varint ic, input_varint ic)
+        method private eat_span ic = match (logged "eat_span" (input_char ic)) with
+            | 'S' -> Monte.oneToOne (v4 ic)
+            | 'B' -> Monte.blob (v4 ic)
             |  _  -> throw_invalid_mast ic "input_span"
         method private eat_expr ic = match exprs#get (Z.to_int (input_varint ic)) with
             | HExpr e -> e
@@ -344,39 +354,53 @@ module MASTContext (Monte : MAST) = struct
         method private eat_patt ic = patts#get (Z.to_int (input_varint ic))
 
         method private eat_tag ic = match input_char ic with
-            | 'P' -> patts#push (match input_char ic with
-                | 'I' -> Monte.ignorePatt (self#eat_expr ic) (self#eat_span ic)
+            | 'P' -> patts#push (match (logged "Pattern tag" (input_char ic)) with
+                | 'I' -> let g = self#eat_expr ic in Monte.ignorePatt g (self#eat_span ic)
                 | 'F' -> let n = input_str ic in
-                    Monte.finalPatt n (self#eat_expr ic) (self#eat_span ic)
+                         let e = self#eat_expr ic in
+                    Monte.finalPatt n e (self#eat_span ic)
                 | 'V' -> let n = input_str ic in
-                    Monte.varPatt n (self#eat_expr ic) (self#eat_span ic)
-                | 'L' -> Monte.listPatt (input_many self#eat_patt ic) (self#eat_span ic)
+                         let e = self#eat_expr ic in
+                    Monte.varPatt n e (self#eat_span ic)
+                | 'L' -> let ps = input_many self#eat_patt ic in Monte.listPatt ps (self#eat_span ic)
                 | 'A' -> let trans = self#eat_expr ic in
-                    Monte.viaPatt trans (self#eat_patt ic) (self#eat_span ic)
-                | 'B' -> Monte.bindingPatt (input_str ic) (self#eat_span ic)
+                         let p = self#eat_patt ic in
+                    Monte.viaPatt trans p (self#eat_span ic)
+                | 'B' -> let s = (input_str ic) in Monte.bindingPatt s (self#eat_span ic)
                 |  x  -> throw_invalid_mast ic "patt"
             )
             (* XXX code chars might not be right *)
-            | 'M' -> let eat_nparam ic = Monte.namedParam (self#eat_expr ic)
-                    (self#eat_patt ic) (self#eat_expr ic) (self#eat_span ic)
-                in exprs#push (HMeth (Monte.metho (input_str ic) (input_str ic)
-                    (input_many self#eat_patt ic) (input_many eat_nparam ic)
-                    (self#eat_expr ic) (self#eat_expr ic)
-                    (self#eat_span ic)))
+            | 'M' -> let eat_nparam ic =
+                       let ek = self#eat_expr ic
+                       and pv = self#eat_patt ic
+                       and ed = self#eat_expr ic in
+                       Monte.namedParam ek pv ed (self#eat_span ic)
+                     in
+                     let doc = (input_str ic)
+                     and verb =  (input_str ic)
+                     and ps = input_many self#eat_patt ic
+                     and nps = input_many eat_nparam ic
+                     and g = self#eat_expr ic
+                     and b = self#eat_expr ic
+                     in exprs#push (HMeth (Monte.metho doc verb ps nps g b (self#eat_span ic)))
             (* XXX this one too *)
-            | 'R' -> exprs#push (HMatch
-                (Monte.matche (self#eat_patt ic) (self#eat_expr ic) (self#eat_span ic)))
-            | 'L' -> exprs#push (HExpr ((match input_char ic with
+            | 'R' ->
+               let p = self#eat_patt ic
+               and e = self#eat_expr ic
+               in exprs#push (HMatch (Monte.matche p e (self#eat_span ic)))
+            | 'L' -> Printf.printf "Literal..."; exprs#push (let e = match input_char ic with
                 | 'N' -> Monte.nullExpr
                 | 'S' -> Monte.strExpr (input_str ic)
-                |  x  -> throw_invalid_mast ic "literal"
-            ) (self#eat_span ic)))
-            |  x  -> exprs#push (HExpr ((match input_char ic with
+                |  x  -> throw_invalid_mast ic ("literal:" ^ Char.escaped x)
+                       in (HExpr (e (self#eat_span ic))))
+            |  tag  -> let expr = match tag with
                 | 'N' -> Monte.nounExpr (input_str ic)
                 | 'B' -> Monte.bindingExpr (input_str ic)
                 | 'S' -> Monte.seqExpr (input_many self#eat_expr ic)
-                | 'C' -> let eat_narg ic = Monte.namedArg (self#eat_expr ic)
-                        (self#eat_expr ic) (self#eat_span ic) in
+                | 'C' -> let eat_narg ic =
+                           let n = (self#eat_expr ic) in
+                           let v = (self#eat_expr ic) in
+                           Monte.namedArg n v (self#eat_span ic) in
                     let t = self#eat_expr ic in
                     let v = input_str ic in
                     let a = input_many self#eat_expr ic in
@@ -385,13 +409,21 @@ module MASTContext (Monte : MAST) = struct
                 | 'D' -> let p = self#eat_patt ic in
                     let ex = self#eat_expr ic in
                     Monte.defExpr p ex (self#eat_expr ic)
-                | 'e' -> Monte.escapeExpr (self#eat_patt ic) (self#eat_expr ic)
-                | 'E' -> Monte.escapeCatchExpr (self#eat_patt ic)
-                    (self#eat_expr ic) (self#eat_patt ic) (self#eat_expr ic)
+                | 'e' -> let p = self#eat_patt ic in Monte.escapeExpr p (self#eat_expr ic)
+                | 'E' -> let p = self#eat_patt ic in
+                         let e = self#eat_expr ic in
+                         let pc = self#eat_patt ic in
+                         let ec = self#eat_expr ic in
+                         Monte.escapeCatchExpr p e pc ec
                 | 'A' -> let target = input_str ic in
                     Monte.assignExpr target (self#eat_expr ic)
-                | 'F' -> Monte.finallyExpr (self#eat_expr ic) (self#eat_expr ic)
-                | 'Y' -> Monte.tryExpr (self#eat_expr ic) (self#eat_patt ic) (self#eat_expr ic)
+                | 'F' -> let eb = (self#eat_expr ic) in
+                         let ec = (self#eat_expr ic) in
+                         Monte.finallyExpr eb ec
+                | 'Y' -> let eb = self#eat_expr ic in
+                         let p = self#eat_patt ic in
+                         let ec = self#eat_expr ic in
+                         Monte.tryExpr eb p ec
                 | 'H' -> Monte.hideExpr (self#eat_expr ic)
                 | 'I' -> let test = self#eat_expr ic in
                     let cons = self#eat_expr ic in
@@ -399,8 +431,8 @@ module MASTContext (Monte : MAST) = struct
                     Monte.ifExpr test cons alt
                 | 'T' -> Monte.metaStateExpr
                 | 'X' -> Monte.metaContextExpr
-                |  x  -> throw_invalid_mast ic "eat_tag"
-            ) (self#eat_span ic)))
+                |  x  -> throw_invalid_mast ic ("eat_tag:" ^ (Char.escaped x))
+                     in exprs#push (HExpr (expr (self#eat_span ic)))
 
         method eat_all_exprs ic =
             try while true do
