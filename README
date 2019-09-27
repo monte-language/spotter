@@ -1,1 +1,11 @@
 Not sure yet.
+
+In toplevel:
+
+    #require "zarith";;
+    #require "camomile";;
+    #use "spotter.ml";;
+
+Then try:
+
+    read_mast "my/cool/module.mast";;
