@@ -8,7 +8,8 @@ type monte = <
     stringOf : string;
     unwrap : monteprim option;
 >
-and monteprim = MNull | MInt of Z.t | MStr of string | MList of monte list;;
+and monteprim = MNull | MBool of bool | MChar of int | MDouble of float | MInt of Z.t | MStr of string
+    | MList of monte list;;
 
 
 module type MAST = sig
@@ -62,6 +63,20 @@ let nullObj : monte = object
     method call verb args namedArgs = None
     method stringOf = "<null>"
     method unwrap = Some MNull
+end;;
+
+let charObj c : monte = object
+    method call verb args namedArgs = match (verb, args) with
+        | _ -> None
+    method stringOf = Char.escaped (char_of_int c)
+    method unwrap = Some (MChar c)
+end;;
+
+let doubleObj d : monte = object
+    method call verb args namedArgs = match (verb, args) with
+        | _ -> None
+    method stringOf = string_of_float d
+    method unwrap = Some (MDouble d)
 end;;
 
 let rec intObj i : monte = object
@@ -189,6 +204,8 @@ module Compiler = struct
     type meth = (string * patt list * nparam list * t)
     type matcher = (patt * t)
     let nullExpr _ = fun _ -> nullObj
+    let charExpr c _ = fun _ -> charObj c
+    let doubleExpr d _ = fun _ -> doubleObj d
     let intExpr i _ = fun _ -> intObj i
     let strExpr s _ = fun _ -> strObj s
     let nounExpr n span = fun env -> match Dict.find_opt n env with
@@ -211,6 +228,10 @@ module Compiler = struct
     let escapeExpr patt body span = fun env -> let ej = ejectTo span in
         try body (patt env ej nullObj span) with
         | Ejecting (o, thrower) when thrower == ej -> o
+    let escapeCatchExpr patt body cpatt cbody span = fun env -> let ej = ejectTo span in
+        try body (patt env ej nullObj span) with
+        | Ejecting (o, thrower) when thrower == ej ->
+                cbody (cpatt env o nullObj)
     let objectExpr doc namePatt asExpr auditors meths matchs span =
         fun env -> object (self)
             (* XXX method dispatch, matcher dispatch *)
@@ -226,6 +247,9 @@ module Compiler = struct
         try body env with
             | UserException _ -> catcher (patt env nullObj nullObj span)
     let hideExpr expr _ = expr
+    let ifExpr test alt cons span = fun env -> match (test env)#unwrap with
+        | MBool b -> if b then alt env else cons env
+        | _       -> UserException span
     let ignorePatt guard span = fun env specimen exit ->
         call_exn guard "coerce" [specimen; exit] []
     let finalPatt noun guard span = fun env specimen exit ->
