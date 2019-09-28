@@ -11,6 +11,28 @@ type monte = <
 and monteprim = MNull | MBool of bool | MChar of int | MDouble of float | MInt of Z.t | MStr of string
     | MList of monte list;;
 
+module State : sig
+    type ('a, 's) t = 's -> ('a * 's)
+    val run : ('a, 's) t -> 's -> ('a * 's)
+    val return : 'a -> ('a, 's) t
+    val map : ('a -> 'b) -> ('a, 's) t -> ('b, 's) t
+    val bind : ('a, 's) t -> ('a -> ('b, 's) t) -> ('b, 's) t
+    val and_then : (unit, 's) t -> ('a, 's) t -> ('a, 's) t
+    val get : ('s, 's) t
+    val set : 's -> (unit, 's) t
+    val modify : ('s -> 's) -> (unit, 's) t
+end = struct
+    type ('a, 's) t = 's -> ('a * 's)
+    let run ma = ma
+    let return x s = (x, s)
+    let map f ma s = let (x, s') = ma s in (f x, s')
+    let bind ma f s = let (x, s') = ma s in f x s'
+    let and_then ma mb = bind ma (fun () -> mb)
+    let get s = (s, s)
+    let set s _ = ((), s)
+    let modify f s = ((), f s)
+end;;
+
 
 module type MAST = sig
     type span
@@ -191,62 +213,76 @@ let unwrapList specimen = match specimen#unwrap with
     | Some (MList l) -> l
     | _              -> raise WrongType
 
+let const k _ = k
+let rec sequence actions = match actions with
+    | f :: fs -> State.bind f (fun x ->
+            State.bind (sequence fs) (fun xs -> State.return (x :: xs)))
+    | []      -> State.return []
+let lazyState f s = f () s
+
 exception UserException of mspan;;
 module Compiler = struct
     type span = mspan
     let oneToOne t = OneToOne t
     let blob t = Blob t
-    type t = monte Dict.t -> monte
-    type patt = monte Dict.t -> monte -> monte -> monte Dict.t
-    type narg = monte Dict.t -> (monte * monte)
-    type nparam = monte Dict.t -> (monte * monte) list -> monte Dict.t
+    type menv = monte Dict.t
+    type t = (monte, menv) State.t
+    type patt = monte -> monte -> (unit, menv) State.t
+    type narg = ((monte * monte), menv) State.t
+    type nparam = (monte * monte) list -> (unit, menv) State.t
     type meth = (string * patt list * nparam list * t)
     type matcher = (patt * t)
-    let nullExpr _ = fun _ -> nullObj
-    let charExpr c _ = fun _ -> charObj c
-    let doubleExpr d _ = fun _ -> doubleObj d
-    let intExpr i _ = fun _ -> intObj i
-    let strExpr s _ = fun _ -> strObj s
-    let nounExpr n span = fun env -> match Dict.find_opt n env with
-        | Some b -> get (get b)
-        | None   -> raise (UserException span)
-    let bindingExpr n span = fun env -> match Dict.find_opt n env with
-        | Some b -> b
-        | None   -> raise (UserException span)
-    let seqExpr exprs _ =
-        fun env -> List.fold_left (fun _ s -> s env) nullObj exprs
-    let callExpr target verb args namedArgs span = fun env ->
-        let t = target env in
-        let a = List.map (fun f -> f env) args in
-        let na = List.map (fun d -> d env) namedArgs in
-        match t#call verb a na with
-            | Some o -> o
-            | None   -> raise (UserException span)
-    let defExpr patt exit expr span = fun env ->
-        (* XXX clearly we don't thread state correctly! *)
-        let rv = expr env in patt env (expr env) (exit env); rv
-    let escapeExpr patt body span = fun env -> let ej = ejectTo span in
-        try body (patt env ej nullObj) with
-        | Ejecting (o, thrower) when thrower == ej -> o
-    let escapeCatchExpr patt body cpatt cbody span = fun env -> let ej = ejectTo span in
-        try body (patt env ej nullObj) with
-        | Ejecting (o, thrower) when thrower == ej ->
-                cbody (cpatt env o nullObj)
+    let nullExpr _ = State.return nullObj
+    let charExpr c _ = State.return (charObj c)
+    let doubleExpr d _ = State.return (doubleObj d)
+    let intExpr i _ = State.return (intObj i)
+    let strExpr s _ = State.return (strObj s)
+    let nounExpr n span = State.bind State.get (fun env -> match Dict.find_opt n env with
+        | Some b -> State.return (get (get b))
+        | None   -> raise (UserException span))
+    let bindingExpr n span = State.bind State.get (fun env -> match Dict.find_opt n env with
+        | Some b -> State.return b
+        | None   -> raise (UserException span))
+    let seqExpr exprs _ = List.fold_left
+        (fun ma expr -> State.bind ma (fun _ -> expr))
+        (State.return nullObj) exprs
+    let callExpr target verb args namedArgs span = State.bind target (fun t ->
+        State.bind (sequence args) (fun a ->
+            State.bind (sequence namedArgs) (fun na ->
+                match t#call verb a na with
+                    | Some o -> State.return o
+                    | None   -> raise (UserException span))))
+    let defExpr patt exit expr span = State.bind expr (fun e ->
+        State.bind exit (fun x ->
+            State.and_then (patt e x) (State.return e)))
+    let escapeExpr patt body span = lazyState (fun () ->
+        let ej = ejectTo span in
+            State.bind (State.and_then (patt ej nullObj) State.get) (fun s ->
+                try let (x, _) = body s in State.return x with
+                | Ejecting (o, thrower) when thrower == ej ->
+                    State.return o))
+    let escapeCatchExpr patt body cpatt cbody span = lazyState (fun () ->
+        let ej = ejectTo span in
+            State.bind (State.and_then (patt ej nullObj) State.get) (fun s ->
+                try let (x, _) = body s in State.return x with
+                | Ejecting (o, thrower) when thrower == ej ->
+                    State.and_then (cpatt o nullObj) cbody))
     let objectExpr doc namePatt asExpr auditors meths matchs span =
-        fun env -> object (self)
+        (* XXX rebind into env *)
+        State.return (object (self)
             (* XXX method dispatch, matcher dispatch *)
             method call verb args namedArgs = None
             (* XXX miranda methods *)
             (* XXX call printOn *)
             method stringOf = "<user>"
             method unwrap = None
-        end
-    let assignExpr name rhs span = fun env ->
-        let rv = rhs env in Dict.add name rv env; rv
-    let tryExpr body patt catcher span = fun env ->
+        end)
+    let assignExpr name rhs span = State.bind rhs (fun rv ->
+        State.and_then (State.modify (Dict.add name rv)) (State.return rv))
+    let tryExpr body patt catcher span = fun s ->
         (* XXX sealed *)
-        try body env with
-            | UserException _ -> catcher (patt env nullObj nullObj)
+        try body s with
+            | UserException _ -> State.and_then (patt nullObj nullObj) catcher s
     let finallyExpr body unwinder span = fun env ->
         try body env with
             (* XXX this would not need duplication if factored into a
@@ -254,46 +290,53 @@ module Compiler = struct
             | UserException s -> unwinder env; raise (UserException s)
             | Ejecting p      -> unwinder env; raise (Ejecting p)
     let hideExpr expr _ = expr
-    let ifExpr test alt cons span = fun env -> match (test env)#unwrap with
-        | Some (MBool b) -> if b then alt env else cons env
-        | _              -> raise (UserException span)
-    let metaStateExpr span = fun env -> object
+    let ifExpr test alt cons span =
+        State.bind test (fun t -> match t#unwrap with
+            | Some (MBool b) -> if b then alt else cons
+            | _              -> raise (UserException span))
+    let metaStateExpr span = State.return (object
         method call verb args namedArgs = None
         method stringOf = "<meta.getState()>"
         method unwrap = None
-    end
-    let metaContextExpr span = fun env -> object
+    end)
+    let metaContextExpr span = State.return (object
         method call verb args namedArgs = None
         method stringOf = "<meta.context()>"
         method unwrap = None
-    end
+    end)
     let metho doc verb patts nparams rguard body span =
         (* XXX rguard? signature synthesis? *)
         (verb, patts, nparams, body)
     let matche patt body span = (patt, body)
-    let namedArg key value span = fun env -> (key env, value env)
-    let namedParam key patt default span = fun env map ->
-        (* XXX uses OCaml equality!! *)
-        match List.assoc_opt (key env) map with
-            | Some value -> patt env value nullObj
-            | None       -> default env; env
-    let ignorePatt guard span = fun env specimen exit ->
-        call_exn (guard env) "coerce" [specimen; exit] []; env
-    let finalPatt noun guard span = fun env specimen exit ->
-        let s = call_exn (guard env) "coerce" [specimen; exit] [] in
-        (* XXX guards *)
-        Dict.add noun (finalSlotObj s) env
-    let varPatt noun guard span = fun env specimen exit ->
-        let s = call_exn (guard env) "coerce" [specimen; exit] [] in
-        (* XXX guards *)
-        Dict.add noun (varSlotObj s) env
-    let listPatt patts span = fun env specimen exit ->
+    let namedArg key value span = State.bind key (fun k ->
+        State.bind value (fun v -> State.return (k, v)))
+    let namedParam key patt default span = fun map ->
+        State.bind key (fun k ->
+            (* XXX uses OCaml equality!! *)
+            match List.assoc_opt k map with
+                | Some value -> patt value nullObj
+                | None       -> State.bind default (const (State.return ())))
+    let ignorePatt guard span = fun specimen exit ->
+        State.bind guard (fun g ->
+            call_exn g "coerce" [specimen; exit] []; State.return ())
+    let finalPatt noun guard span = fun specimen exit ->
+        State.bind guard (fun g ->
+            let s = call_exn g "coerce" [specimen; exit] [] in
+            (* XXX guards *)
+            State.modify (Dict.add noun (finalSlotObj s)))
+    let varPatt noun guard span = fun specimen exit ->
+        State.bind guard (fun g ->
+            let s = call_exn g "coerce" [specimen; exit] [] in
+            (* XXX guards *)
+            State.modify (Dict.add noun (varSlotObj s)))
+    let listPatt patts span = fun specimen exit ->
         let specimens = unwrapList specimen in
-        List.fold_left2 (fun e p s -> p e s exit) env patts specimens
-    let viaPatt trans patt span = fun env specimen exit ->
-        patt env (call_exn (trans env) "run" [specimen; exit] []) exit
-    let bindingPatt noun span = fun env specimen exit ->
-        Dict.add noun specimen env
+        List.fold_left2 (fun ma p s -> State.and_then ma (p s exit)) (State.return ()) patts specimens
+    let viaPatt transformer patt span = fun specimen exit ->
+        State.bind transformer (fun trans ->
+            patt (call_exn trans "run" [specimen; exit] []) exit)
+    let bindingPatt noun span = fun specimen exit ->
+        State.modify (Dict.add noun specimen)
 end;;
 
 let input_str ic = really_input_string ic (Z.to_int (input_varint ic));;
