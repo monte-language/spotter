@@ -6,6 +6,7 @@ in pkgs.stdenv.mkDerivation {
   buildInputs = with pkgs; [
     git gist
     rlwrap
+    ocamlformat
     ocaml ] ++ (with ocamlPackages; [
       utop core findlib camomile zarith
   ]);
