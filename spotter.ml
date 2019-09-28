@@ -62,7 +62,9 @@ end;;
 module Dict = Map.Make(String);;
 
 let nullObj : monte = object
-    method call verb args namedArgs = None
+    method call verb args namedArgs = match (verb, args) with
+      | ("coerce", [specimen; _ej]) -> Some specimen
+      | _ -> None
     method stringOf = "<null>"
     method unwrap = Some MNull
 end;;
