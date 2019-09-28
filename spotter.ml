@@ -213,7 +213,7 @@ module Compiler = struct
     let strExpr s _ = fun _ -> strObj s
     let nounExpr n span = fun env -> match Dict.find_opt n env with
         | Some b -> get (get b)
-        | None   -> raise (UserException span)
+        | None   -> Printf.printf "nounExpr: no %s in env" n; raise (UserException span)
     let bindingExpr n span = fun env -> match Dict.find_opt n env with
         | Some b -> b
         | None   -> raise (UserException span)
@@ -236,10 +236,18 @@ module Compiler = struct
         try body (patt env ej nullObj) with
         | Ejecting (o, thrower) when thrower == ej ->
                 cbody (cpatt env o nullObj)
-    let objectExpr doc namePatt asExpr auditors meths matchs span =
+    let objectExpr doc namePatt asExpr auditors meths matchs span: t =
         fun env -> object (self)
             (* XXX method dispatch, matcher dispatch *)
-            method call verb args namedArgs = None
+            method call verb args namedArgs: monte option =
+              Printf.printf "call: %s/%d" verb (List.length args);
+              match List.find_opt (fun (mVerb, _, _, _) -> Printf.printf "method %s?" mVerb; mVerb = verb) meths with
+              | None -> Printf.printf "no such method"; None (* refused. XXX matchers *)
+              | Some (_, params, nParams, body) ->
+                 let exit = nullObj (* XXX *) in
+                 (* XXX bind namePatt to self *)
+                 let env' = List.fold_left2 (fun e p a -> p e a exit) env params args
+                 in Printf.printf "executing %s" verb; Some (body env')
             (* XXX miranda methods *)
             (* XXX call printOn *)
             method stringOf = "<user>"
@@ -286,11 +294,12 @@ module Compiler = struct
     let finalPatt noun guard span = fun env specimen exit ->
         let s = call_exn (guard env) "coerce" [specimen; exit] [] in
         (* XXX guards *)
-        Dict.add noun (finalSlotObj s) env
+        Printf.printf "finalPatt binding %s ..." noun;
+        Dict.add noun (bindingObj (finalSlotObj s)) env
     let varPatt noun guard span = fun env specimen exit ->
         let s = call_exn (guard env) "coerce" [specimen; exit] [] in
         (* XXX guards *)
-        Dict.add noun (varSlotObj s) env
+        Dict.add noun (bindingObj (varSlotObj s)) env
     let listPatt patts span = fun env specimen exit ->
         let specimens = unwrapList specimen in
         List.fold_left2 (fun e p s -> p e s exit) env patts specimens
