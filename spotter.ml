@@ -102,6 +102,11 @@ end
 
 module Dict = Map.Make (String)
 
+module AtomDict = Map.Make (struct type t = string * int
+
+                                   let compare = compare
+end)
+
 let nullObj : monte =
   object
     method call verb args namedArgs =
@@ -373,6 +378,12 @@ module Compiler = struct
               State.and_then (cpatt o nullObj) cbody ) )
 
   let objectExpr doc namePatt asExpr auditors meths matchs span =
+    let methdict =
+      List.fold_left
+        (fun d (v, ps, nps, body) ->
+          AtomDict.add (v, List.length ps) (ps, nps, body) d )
+        AtomDict.empty meths
+    in
     State.bind asExpr (fun ase ->
         State.bind (sequence auditors) (fun auds (* XXX rebind into env *)
                                                  s ->
@@ -381,16 +392,12 @@ module Compiler = struct
                 method call verb args namedArgs : monte option =
                   Printf.printf "call: %s/%d" verb (List.length args) ;
                   match
-                    List.find_opt
-                      (fun (mVerb, _, _, _) ->
-                        Printf.printf "method %s?" mVerb ;
-                        mVerb = verb )
-                      meths
+                    AtomDict.find_opt (verb, List.length args) methdict
                   with
                   | None ->
                       Printf.printf "no such method" ;
                       None (* refused. XXX matchers *)
-                  | Some (_, params, nParams, body) ->
+                  | Some (params, nParams, body) ->
                       let exit = nullObj (* XXX *) in
                       (* XXX bind namePatt to self *)
                       (* XXX duplicate code with listPatt, refactor! *)
