@@ -339,12 +339,12 @@ module Compiler = struct
         State.bind guard (fun g ->
             let s = call_exn g "coerce" [specimen; exit] [] in
             (* XXX guards *)
-            State.modify (Dict.add noun (finalSlotObj s)))
+            State.modify (Dict.add noun (bindingObj (finalSlotObj s))))
     let varPatt noun guard span = fun specimen exit ->
         State.bind guard (fun g ->
             let s = call_exn g "coerce" [specimen; exit] [] in
             (* XXX guards *)
-            State.modify (Dict.add noun (varSlotObj s)))
+            State.modify (Dict.add noun (bindingObj (varSlotObj s))))
     let listPatt patts span = fun specimen exit ->
         let specimens = unwrapList specimen in
         List.fold_left2 (fun ma p s -> State.and_then ma (p s exit)) (State.return ()) patts specimens
