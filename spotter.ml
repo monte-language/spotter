@@ -415,6 +415,14 @@ module MASTContext (Monte : MAST) = struct
                          let pc = self#eat_patt ic in
                          let ec = self#eat_expr ic in
                          Monte.escapeCatchExpr p e pc ec
+                | 'O' -> (* Object with no script, just direct methods and matchers. *)
+                   let doc = input_str ic
+                   and patt = self#eat_patt ic
+                   and asExpr = self#eat_expr ic
+                   and implements = input_many self#eat_expr ic
+                   and methods = input_many self#eat_method ic
+                   and matchers = input_many self#eat_matcher ic
+                   in Monte.objectExpr doc patt asExpr implements methods matchers
                 | 'A' -> let target = input_str ic in
                     Monte.assignExpr target (self#eat_expr ic)
                 | 'F' -> let eb = (self#eat_expr ic) in
