@@ -18,6 +18,14 @@ and monteprim =
   | MStr of string
   | MList of monte list
 
+let to_monte
+    (m :
+      < call: string -> monte list -> (monte * monte) list -> monte option
+      ; stringOf: string
+      ; unwrap: monteprim option
+      ; .. >) : monte =
+  (m :> monte)
+
 module State : sig
   type ('a, 's) t = 's -> 'a * 's
 
@@ -265,25 +273,31 @@ let string_of_span span =
 exception Ejecting of (monte * monte)
 exception DoubleThrown
 
-let ejectTo span : monte =
-  object (self)
-    val mutable thrown = false
+let ejectTo span =
+  let ej =
+    object (self)
+      val mutable thrown = false
 
-    method private throw v =
-      if thrown then raise DoubleThrown ;
-      thrown <- true ;
-      raise (Ejecting (v, self))
+      method disable =
+        if thrown then raise DoubleThrown ;
+        thrown <- true
 
-    method call verb args namedArgs =
-      match (verb, args) with
-      | "run", [v] -> self#throw v
-      | "run", [] -> self#throw nullObj
-      | _ -> None
+      method private throw v =
+        self#disable ;
+        raise (Ejecting (v, to_monte self))
 
-    method stringOf = "<ejector at " ^ string_of_span span ^ ">"
+      method call verb args namedArgs =
+        match (verb, args) with
+        | "run", [v] -> self#throw v
+        | "run", [] -> self#throw nullObj
+        | _ -> None
 
-    method unwrap = None
-  end
+      method stringOf = "<ejector at " ^ string_of_span span ^ ">"
+
+      method unwrap = None
+    end
+  in
+  (to_monte ej, fun () -> ej#disable)
 
 exception WrongType
 
@@ -355,25 +369,25 @@ module Compiler = struct
 
   let escapeExpr patt body span =
     lazyState (fun () ->
-        let ej = ejectTo span in
+        let ej, disable = ejectTo span in
         State.bind
           (State.and_then (patt ej nullObj) State.get)
           (fun s ->
             try
               let x, _ = body s in
-              State.return x
+              disable () ; State.return x
             with Ejecting (o, thrower) when thrower == ej -> State.return o )
     )
 
   let escapeCatchExpr patt body cpatt cbody span =
     lazyState (fun () ->
-        let ej = ejectTo span in
+        let ej, disable = ejectTo span in
         State.bind
           (State.and_then (patt ej nullObj) State.get)
           (fun s ->
             try
               let x, _ = body s in
-              State.return x
+              disable () ; State.return x
             with Ejecting (o, thrower) when thrower == ej ->
               State.and_then (cpatt o nullObj) cbody ) )
 
