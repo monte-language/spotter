@@ -643,6 +643,12 @@ module MASTContext (Monte : MAST) = struct
               (let e =
                  match input_char ic with
                  | 'N' -> Monte.nullExpr
+                 | 'I' ->
+                     let i = input_varint ic in
+                     let shifted = Z.shift_right i 1 in
+                     Monte.intExpr
+                       ( if Z.testbit i 0 then Z.logxor (Z.of_int (-1)) shifted
+                       else shifted )
                  | 'S' -> Monte.strExpr (input_str ic)
                  | x -> throw_invalid_mast ic ("literal:" ^ Char.escaped x)
                in
