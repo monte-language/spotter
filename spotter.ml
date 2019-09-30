@@ -239,6 +239,10 @@ let varSlotObj value : monte =
     method unwrap = None
   end
 
+let safeScope =
+  Dict.add "null" (bindingObj (finalSlotObj nullObj))
+    (Dict.add "_makeList" (bindingObj (finalSlotObj _makeList)) Dict.empty)
+
 exception Refused of (string * monte list * monte list)
 
 (* The main calling interface. Handles Miranda methods. Propagates exceptions
