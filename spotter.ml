@@ -151,6 +151,14 @@ let rec intObj i : monte =
       match (verb, args) with
       | "next", [] -> Some (intObj (Z.succ i))
       | "previous", [] -> Some (intObj (Z.pred i))
+      | "add", [jj] ->
+         (match jj#unwrap with
+          | Some (MInt j) -> Some (intObj (Z.add i j))
+          | _ -> None)
+      | "multiply", [jj] ->
+         (match jj#unwrap with
+          | Some (MInt j) -> Some (intObj (Z.mul i j))
+          | _ -> None)
       | _ -> None
 
     method stringOf = Z.to_string i
