@@ -192,6 +192,16 @@ let rec listObj l : monte =
     method unwrap = Some (MList l)
   end
 
+let _makeList : monte =
+  object
+    method call verb args namedArgs =
+      match (verb, args) with
+      | "run", _ -> Some (listObj args)
+      | _ -> None
+    method stringOf = "_makeList"
+    method unwrap = None
+  end
+
 let bindingObj slot : monte =
   object
     method call verb args namedArgs =
