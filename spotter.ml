@@ -450,10 +450,10 @@ module Compiler = struct
 
   let hideExpr expr _ = expr
 
-  let ifExpr test alt cons span =
+  let ifExpr test cons alt span =
     State.bind test (fun t ->
         match t#unwrap with
-        | Some (MBool b) -> if b then alt else cons
+        | Some (MBool b) -> if b then cons else alt
         | _ -> raise (UserException span) )
 
   let metaStateExpr span =
