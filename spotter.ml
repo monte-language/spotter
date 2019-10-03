@@ -151,6 +151,14 @@ let rec intObj i : monte =
       match (verb, args) with
       | "next", [] -> Some (intObj (Z.succ i))
       | "previous", [] -> Some (intObj (Z.pred i))
+      | "add", [jj] ->
+         (match jj#unwrap with
+          | Some (MInt j) -> Some (intObj (Z.add i j))
+          | _ -> None)
+      | "multiply", [jj] ->
+         (match jj#unwrap with
+          | Some (MInt j) -> Some (intObj (Z.mul i j))
+          | _ -> None)
       | _ -> None
 
     method stringOf = Z.to_string i
@@ -182,6 +190,16 @@ let rec listObj l : monte =
       "[" ^ String.concat " " (List.map (fun o -> o#stringOf) l) ^ "]"
 
     method unwrap = Some (MList l)
+  end
+
+let _makeList : monte =
+  object
+    method call verb args namedArgs =
+      match (verb, args) with
+      | "run", _ -> Some (listObj args)
+      | _ -> None
+    method stringOf = "_makeList"
+    method unwrap = None
   end
 
 let bindingObj slot : monte =
@@ -220,6 +238,10 @@ let varSlotObj value : monte =
 
     method unwrap = None
   end
+
+let safeScope =
+  Dict.add "null" (bindingObj (finalSlotObj nullObj))
+    (Dict.add "_makeList" (bindingObj (finalSlotObj _makeList)) Dict.empty)
 
 exception Refused of (string * monte list * monte list)
 
