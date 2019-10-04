@@ -818,84 +818,92 @@ module M = MASTContext (Compiler)
 exception NotImplemented of string
 
 module ASTPrinter = struct
+  open Format
   type span = unit
 
   let oneToOne _ = ()
   let blob _ = ()
 
-  type t = string list
-  type patt = string list
-  type narg = string list
-  type nparam = string list
-  type meth = string list
-  type matcher = string list
+  type t = formatter -> unit
+  type patt = t
+  type narg = t
+  type nparam = t
+  type meth = t
+  type matcher = t
 
-  let rec sepBy (sep : string) (parts : string list list) : string list =
-    match parts with
-    | [] -> []
-    | [p] -> p
-    | p0 :: ps -> p0 @ [sep] @ sepBy sep ps
+  let p ff x = x ff
+  let comma ppf: unit = fprintf ppf ",@,"
+  (* XXX couldn't figure out pp_print_list *)
+  let rec print_items ppf a: unit = match a with
+    | [] -> ()
+    | [a] -> a ppf
+    | a0::rest -> a0 ppf; comma ppf; print_items ppf rest
 
-  let charExpr i _s =
-    [ ( if i < 128 then Char.escaped (Char.chr i)
-      else raise (NotImplemented "non-ascii char") ) ]
-
-  let doubleExpr f _s = [Printf.sprintf "%f" f]
-  let intExpr z _s = [Printf.sprintf "%d" (Z.to_int z)]
-  let strExpr str _s = ["\""; str; "\""] (* XXX quoting *)
-
-  let nounExpr n _s = [n] (* XXX escaping *)
-
-  let bindingExpr n _s = ["&&" ^ n] (* XXX escaping *)
-
-  let seqExpr parts _s : t = sepBy "; " parts
-
-  let callExpr target verb args nargs _s =
+  let charExpr i _s ppf = if i < 128 then fprintf ppf "'%s'" (Char.escaped (Char.chr i))
+                          else (raise (NotImplemented "non-ascii char"))
+  let doubleExpr f _s ppf = fprintf ppf "%f" f
+  let intExpr z _s ppf = fprintf ppf "%d" (Z.to_int z)
+  let strExpr str _s ppf = fprintf ppf "\"%s\"" str (* XXX quoting *)
+  let nounExpr n _s ppf = fprintf ppf "%s" n (* XXX escaping *)
+  let bindingExpr n _s ppf = fprintf ppf "&&%s" n (* XXX escaping *)
+  let rec seqExpr exprs s ppf: unit = match exprs with
+    | [] -> ()
+    | e0 :: es ->
+       e0 ppf;
+       pp_print_string ppf ";";
+       pp_print_cut ppf ();
+       seqExpr es s ppf
+  let callExpr target verb args nargs _s (ppf: formatter) =
     match nargs with
-    | [] -> target @ ["."; verb; "("] @ sepBy ", " args @ [")"]
+    | [] -> fprintf ppf "%a.%s(@[<hv 2>@,%a@])" p target verb print_items args
     | _ -> raise (NotImplemented "printing named args")
-
-  let defExpr patt exitOpt expr _span =
-    match exitOpt with
-    | None -> ["def"; " "] @ patt @ [" "; ":="] @ expr
-    | _ -> raise (NotImplemented "def with exit")
-
-  let escapeExpr patt body span = raise (NotImplemented "escape")
-
-  let escapeCatchExpr patt body cpatt cbody span =
-    raise (NotImplemented "catch")
-
-  let objectExpr doc namePatt asExpr auditors meths matchs span =
-    raise (NotImplemented "object")
-
-  let assignExpr name rhs span = raise (NotImplemented "assign")
-
-  let tryExpr body patt catcher _ =
-    ["try { "] @ body @ ["} catch ("] @ patt @ [")"] @ ["{"] @ catcher @ ["}"]
-
+  let defExpr patt exitOpt expr _span ppf =
+    let print_opt token ppf nodeOpt =
+      match nodeOpt with
+      | Some node -> fprintf ppf "@ %s@ %a" token p node
+      | None -> ()
+    in
+    fprintf ppf "def %a%a := %a" p patt (print_opt "exit") exitOpt p expr
+  let escapeExpr patt body span ppf =
+    fprintf ppf "escape @[%a@]@ @[{@;%a}@]" p patt p body
+  let escapeCatchExpr patt body cpatt cbody span ppf =
+    fprintf ppf "escape %a { %a } catch %a { %a }" p patt p body p cpatt p cbody
+  let objectExpr doc namePatt asExpr auditors meths matchs span ppf =
+    (* XXX TODO: asExpr, auditors, matchs *)
+    fprintf ppf "object %a { %a }" p namePatt (* XXX items is goofy *) print_items meths
+  let assignExpr name rhs span ppf = fprintf ppf "%s := @[%a@]" name p rhs
+  let tryExpr body patt catcher _ ppf =
+    fprintf ppf "try @[<v>{@;%a}@;@]@ catch %a@ @[<hv>{@;%a}@;@] " p body p patt p catcher
   let finallyExpr body unwinder span = raise (NotImplemented "finally")
-  let hideExpr expr _ = raise (NotImplemented "hide")
-  let ifExpr test alt cons span = raise (NotImplemented "if")
+  let hideExpr expr _ ppf = fprintf ppf "{@[%a@]}" p expr
+  let ifExpr test cons alt span ppf =
+    fprintf ppf "if @[<hv>(%a)@] @[<v>{@;%a@;}@]" p test p cons;
+    match alt with
+    | Some e -> fprintf ppf "@ else@ @[<v>{%a}@]" p e
+    | None -> ()
   let metaStateExpr span = raise (NotImplemented "metaState")
   let metaContextExpr span = raise (NotImplemented "metaContext")
-
-  let metho doc verb patts nparams rguard body span =
-    raise (NotImplemented "metho")
-
+  let metho doc verb patts nparams rguard body span ppf =
+    match doc with
+    | "" -> (match nparams with
+             | [] -> (fprintf ppf "method %s @[<h>(%a)@] @[<v 2>{@;%a}@]"
+                        verb print_items patts p body)
+             | _ -> raise (NotImplemented "named params in method")
+            )
+    | _ -> raise (NotImplemented "method doc")
   let matche patt body span = raise (NotImplemented "matche")
   let namedArg key value span = raise (NotImplemented "namedArg")
   let namedParam key patt default span = raise (NotImplemented "namedParam")
-
-  let ignorePatt guardOpt span =
-    match guardOpt with None -> ["_"] | Some g -> ["_: "] @ g
-
-  let finalPatt noun guardOpt span =
-    match guardOpt with None -> [noun] | Some g -> [noun; " : "] @ g
-
-  let varPatt noun guard span = raise (NotImplemented "var")
-  let listPatt patts span = raise (NotImplemented "listPatt")
-  let viaPatt transformer patt span = raise (NotImplemented "via")
-  let bindingPatt noun span = raise (NotImplemented "bindingPatt")
+  let printGuardOpt ppf g: unit = match g with
+    | None -> ()
+    | Some gg -> fprintf ppf ": @[%a@]" p gg (* XXX parens? *)
+  let ignorePatt guardOpt span ppf = fprintf ppf "_%a" printGuardOpt guardOpt
+  let finalPatt noun guardOpt span ppf = fprintf ppf "%s%a" noun printGuardOpt guardOpt
+  let varPatt noun guardOpt span ppf = fprintf ppf "var %s%a" noun printGuardOpt guardOpt
+  let listPatt patts span ppf = fprintf ppf "@[[%a]@]" print_items patts
+  let viaPatt transformer patt span ppf =
+    fprintf ppf "via (%a) %a" p transformer p patt
+  let bindingPatt noun span ppf = fprintf ppf "&&%s" noun
 end
 
 module MP = MASTContext (ASTPrinter)
