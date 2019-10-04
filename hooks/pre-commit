@@ -3,4 +3,4 @@ set -eux -o pipefail
 
 # Reformat OCaml code before commit. Based on git's example hook.
 
-ocamlformat -i --profile=compact *.ml
+ocamlformat -i *.ml
