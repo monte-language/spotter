@@ -109,9 +109,10 @@ end
 
 module Dict = Map.Make (String)
 
-module AtomDict = Map.Make (struct type t = string * int
+module AtomDict = Map.Make (struct
+  type t = string * int
 
-                                   let compare = compare
+  let compare = compare
 end)
 
 let nullObj : monte =
@@ -262,8 +263,7 @@ let input_varint ic =
   let rec go shift acc =
     let b = Z.of_int (input_byte ic) in
     let n = Z.logor acc (Z.shift_left (Z.logand b (Z.of_int 0x7f)) shift) in
-    if not (Z.testbit b 7) then n else go (shift + 7) n
-  in
+    if not (Z.testbit b 7) then n else go (shift + 7) n in
   go 0 Z.zero
 
 exception InvalidMAST of (string * int)
@@ -285,8 +285,7 @@ let input_span ic =
 
 let string_of_span span =
   let sos (x1, y1, x2, y2) =
-    String.concat ":" (List.map Z.to_string [x1; y1; x2; y2])
-  in
+    String.concat ":" (List.map Z.to_string [x1; y1; x2; y2]) in
   match span with OneToOne t -> "str:" ^ sos t | Blob t -> "blob:" ^ sos t
 
 exception Ejecting of (monte * monte)
@@ -314,8 +313,7 @@ let ejectTo span =
       method stringOf = "<ejector at " ^ string_of_span span ^ ">"
 
       method unwrap = None
-    end
-  in
+    end in
   (to_monte ej, fun () -> ej#disable)
 
 exception WrongType
@@ -329,7 +327,7 @@ let rec sequence actions =
   match actions with
   | f :: fs ->
       State.bind f (fun x ->
-          State.bind (sequence fs) (fun xs -> State.return (x :: xs)) )
+          State.bind (sequence fs) (fun xs -> State.return (x :: xs)))
   | [] -> State.return []
 
 let lazyState f s = f () s
@@ -361,7 +359,7 @@ module Compiler = struct
     State.bind State.get (fun env ->
         match Dict.find_opt n env with
         | Some b -> State.return (get (get b))
-        | None -> raise (UserException span) )
+        | None -> raise (UserException span))
 
   let nullExpr span = nounExpr "null" span
 
@@ -369,7 +367,7 @@ module Compiler = struct
     State.bind State.get (fun env ->
         match Dict.find_opt n env with
         | Some b -> State.return b
-        | None -> raise (UserException span) )
+        | None -> raise (UserException span))
 
   let seqExpr exprs _ =
     List.fold_left
@@ -382,15 +380,15 @@ module Compiler = struct
             State.bind (sequence namedArgs) (fun na ->
                 match t#call verb a na with
                 | Some o -> State.return o
-                | None -> raise (UserException span) ) ) )
+                | None -> raise (UserException span))))
 
   let defExpr patt exitOpt expr span =
     State.bind expr (fun e ->
         match exitOpt with
         | Some exit ->
             State.bind exit (fun x ->
-                State.and_then (patt e x) (State.return e) )
-        | None -> State.and_then (patt e nullObj) (State.return e) )
+                State.and_then (patt e x) (State.return e))
+        | None -> State.and_then (patt e nullObj) (State.return e))
 
   let escapeExpr patt body span =
     lazyState (fun () ->
@@ -401,8 +399,7 @@ module Compiler = struct
             try
               let x, _ = body s in
               disable () ; State.return x
-            with Ejecting (o, thrower) when thrower == ej -> State.return o )
-    )
+            with Ejecting (o, thrower) when thrower == ej -> State.return o))
 
   let escapeCatchExpr patt body cpatt cbody span =
     lazyState (fun () ->
@@ -414,18 +411,16 @@ module Compiler = struct
               let x, _ = body s in
               disable () ; State.return x
             with Ejecting (o, thrower) when thrower == ej ->
-              State.and_then (cpatt o nullObj) cbody ) )
+              State.and_then (cpatt o nullObj) cbody))
 
   let objectExpr doc namePatt asExpr auditors meths matchs span =
     let methdict =
       List.fold_left
         (fun d (v, ps, nps, body) ->
-          AtomDict.add (v, List.length ps) (ps, nps, body) d )
-        AtomDict.empty meths
-    in
+          AtomDict.add (v, List.length ps) (ps, nps, body) d)
+        AtomDict.empty meths in
     State.bind asExpr (fun ase ->
-        State.bind (sequence auditors) (fun auds (* XXX rebind into env *)
-                                                 s ->
+        State.bind (sequence auditors) (fun auds (* XXX rebind into env *) s ->
             ( object (self)
                 (* XXX method dispatch, matcher dispatch *)
                 method call verb args namedArgs : monte option =
@@ -443,8 +438,7 @@ module Compiler = struct
                       let env' =
                         List.fold_left2
                           (fun ma p s -> State.and_then ma (p s exit))
-                          (State.return ()) params args
-                      in
+                          (State.return ()) params args in
                       Printf.printf "executing %s" verb ;
                       let o, _ = State.and_then env' body s in
                       Some o
@@ -455,16 +449,16 @@ module Compiler = struct
 
                 method unwrap = None
               end
-            , s ) ) )
+            , s )))
 
   let assignExpr name rhs span =
     State.bind rhs (fun rv ->
-        State.and_then (State.modify (Dict.add name rv)) (State.return rv) )
+        State.and_then (State.modify (Dict.add name rv)) (State.return rv))
 
   let tryExpr body patt catcher span s =
     (* XXX sealed *)
-    try body s with UserException _ ->
-      State.and_then (patt nullObj nullObj) catcher s
+    try body s
+    with UserException _ -> State.and_then (patt nullObj nullObj) catcher s
 
   let finallyExpr body unwinder span env =
     try body env with
@@ -480,7 +474,7 @@ module Compiler = struct
     State.bind test (fun t ->
         match t#unwrap with
         | Some (MBool b) -> if b then cons else alt'
-        | _ -> raise (UserException span) )
+        | _ -> raise (UserException span))
 
   let metaStateExpr span =
     State.return
@@ -519,7 +513,7 @@ module Compiler = struct
         | None ->
             State.bind
               (maybe (nullExpr span) default)
-              (const (State.return ())) )
+              (const (State.return ())))
 
   let coerceOpt guardOpt specimen exit =
     match guardOpt with
@@ -527,21 +521,21 @@ module Compiler = struct
     | Some guard ->
         State.bind guard (fun g ->
             let s = call_exn g "coerce" [specimen; exit] [] in
-            State.return s )
+            State.return s)
 
   let ignorePatt guardOpt span specimen exit =
     State.bind (coerceOpt guardOpt specimen exit) (fun _prize ->
-        State.return () )
+        State.return ())
 
   let finalPatt noun guard span specimen exit =
     State.bind (coerceOpt guard specimen exit) (fun s ->
         (* XXX guards *)
-        State.modify (Dict.add noun (bindingObj (finalSlotObj s))) )
+        State.modify (Dict.add noun (bindingObj (finalSlotObj s))))
 
   let varPatt noun guard span specimen exit =
     State.bind (coerceOpt guard specimen exit) (fun s ->
         (* XXX guards *)
-        State.modify (Dict.add noun (bindingObj (varSlotObj s))) )
+        State.modify (Dict.add noun (bindingObj (varSlotObj s))))
 
   let listPatt patts span specimen exit =
     let specimens = unwrapList specimen in
@@ -551,7 +545,7 @@ module Compiler = struct
 
   let viaPatt transformer patt span specimen exit =
     State.bind transformer (fun trans ->
-        patt (call_exn trans "run" [specimen; exit] []) exit )
+        patt (call_exn trans "run" [specimen; exit] []) exit)
 
   let bindingPatt noun span specimen exit =
     State.modify (Dict.add noun specimen)
@@ -588,7 +582,7 @@ let open_in_mast path =
   let ic = open_in_bin path in
   (* Check the magic number. *)
   for i = 0 to String.length mast_magic - 1 do
-    if input_char ic <> mast_magic.[i] then ( close_in ic ; raise InvalidMagic )
+    if input_char ic <> mast_magic.[i] then (close_in ic ; raise InvalidMagic)
   done ;
   ic
 
@@ -678,8 +672,7 @@ module MASTContext (Monte : MAST) = struct
               let ek = self#eat_expr ic
               and pv = self#eat_patt ic
               and ed = self#eat_expr_opt ic in
-              Monte.namedParam ek pv ed (self#eat_span ic)
-            in
+              Monte.namedParam ek pv ed (self#eat_span ic) in
             let doc = input_str ic
             and verb = input_str ic
             and ps = input_many self#eat_patt ic
@@ -722,8 +715,7 @@ module MASTContext (Monte : MAST) = struct
                   let eat_narg ic =
                     let n = self#eat_expr ic in
                     let v = self#eat_expr ic in
-                    Monte.namedArg n v (self#eat_span ic)
-                  in
+                    Monte.namedArg n v (self#eat_span ic) in
                   let t = self#eat_expr ic in
                   let v = input_str ic in
                   let a = input_many self#eat_expr ic in
@@ -771,8 +763,7 @@ module MASTContext (Monte : MAST) = struct
                   Monte.ifExpr test cons alt
               | 'T' -> Monte.metaStateExpr
               | 'X' -> Monte.metaContextExpr
-              | x -> throw_invalid_mast ic ("eat_tag:" ^ Char.escaped x)
-            in
+              | x -> throw_invalid_mast ic ("eat_tag:" ^ Char.escaped x) in
             exprs#push (HExpr (expr (self#eat_span ic)))
 
       method eat_all_exprs ic =
