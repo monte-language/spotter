@@ -334,8 +334,6 @@ let lazyState f s = f () s
 
 exception UserException of mspan
 
-let maybe d opt = match opt with Some a -> a | None -> d
-
 module Compiler = struct
   type span = mspan
 
@@ -470,7 +468,7 @@ module Compiler = struct
   let hideExpr expr _ = expr
 
   let ifExpr test cons alt span =
-    let alt' = maybe (nullExpr span) alt in
+    let alt' = Option.value alt ~default:(nullExpr span) in
     State.bind test (fun t ->
         match t#unwrap with
         | Some (MBool b) -> if b then cons else alt'
@@ -512,7 +510,7 @@ module Compiler = struct
         | Some value -> patt value nullObj
         | None ->
             State.bind
-              (maybe (nullExpr span) default)
+              (Option.value default ~default:(nullExpr span))
               (const (State.return ())))
 
   let coerceOpt guardOpt specimen exit =
