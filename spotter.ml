@@ -18,6 +18,7 @@ and monteprim =
   | MStr of string
   | MList of monte list
 
+(* Narrowing: Cast away extra non-private methods of Monte objects. *)
 let to_monte
     (m :
       < call: string -> monte list -> (monte * monte) list -> monte option
@@ -124,6 +125,18 @@ let nullObj : monte =
     method unwrap = Some MNull
   end
 
+let boolObj b : monte =
+  object
+    method call verb args namedArgs =
+      match (verb, args) with
+      | "pick", [x; y] -> Some (if b then x else y)
+      | _ -> None
+
+    method stringOf = if b then "true" else "false"
+
+    method unwrap = Some (MBool b)
+  end
+
 let charObj c : monte =
   object
     method call verb args namedArgs = match (verb, args) with _ -> None
@@ -192,7 +205,7 @@ let rec listObj l : monte =
 let _makeList : monte =
   object
     method call verb args namedArgs =
-      match (verb, args) with "run", _ -> Some (listObj args) | _ -> None
+      match verb with "run" -> Some (listObj args) | _ -> None
 
     method stringOf = "_makeList"
 
@@ -239,8 +252,10 @@ let varSlotObj value : monte =
 let safeScope =
   Dict.of_seq
     (List.to_seq
-       [ ("null", bindingObj (finalSlotObj nullObj))
-       ; ("_makeList", bindingObj (finalSlotObj _makeList)) ])
+       (List.map
+          (fun (k, v) -> (k, bindingObj (finalSlotObj v)))
+          [ ("null", nullObj); ("true", boolObj true); ("false", boolObj false)
+          ; ("_makeList", _makeList) ]))
 
 type mspan =
   | OneToOne of (Z.t * Z.t * Z.t * Z.t)
