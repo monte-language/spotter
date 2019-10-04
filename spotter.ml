@@ -241,7 +241,35 @@ let safeScope =
     (bindingObj (finalSlotObj nullObj))
     (Dict.add "_makeList" (bindingObj (finalSlotObj _makeList)) Dict.empty)
 
-exception Refused of (string * monte list * monte list)
+type mspan =
+  | OneToOne of (Z.t * Z.t * Z.t * Z.t)
+  | Blob of (Z.t * Z.t * Z.t * Z.t)
+
+let string_of_span span =
+  let sos (x1, y1, x2, y2) =
+    String.concat ":" (List.map Z.to_string [x1; y1; x2; y2]) in
+  match span with OneToOne t -> "str:" ^ sos t | Blob t -> "blob:" ^ sos t
+
+type mexn =
+  | Refused of (string * monte list * monte list)
+  | Ejecting of (monte * monte)
+  | DoubleThrown
+  | WrongType
+  | UserException of mspan
+
+let string_of_mexn m =
+  match m with
+  | Refused (verb, args, namedArgs) ->
+      "Message refused: ." ^ verb ^ "/" ^ string_of_int (List.length args)
+  | Ejecting (payload, ej) ->
+      "Ejector: " ^ ej#stringOf ^ "(" ^ payload#stringOf ^ ")"
+  | DoubleThrown ->
+      "An ejector has come forward with a complaint of being thrown...twice!"
+  | WrongType -> "Wrong type while unwrapping data object"
+  | UserException span ->
+      "User-created exception at span " ^ string_of_span span
+
+exception MonteException of mexn
 
 (* The main calling interface. Handles Miranda methods. Propagates exceptions
  * on failure. *)
@@ -253,7 +281,8 @@ let call_exn target verb args namedArgs : monte =
     (* Miranda behaviors. *)
     | "_sealedDispatch", [_] -> nullObj
     | "_uncall", [] -> nullObj
-    | _ -> raise (Refused (verb, args, List.map fst namedArgs)) )
+    | _ ->
+        raise (MonteException (Refused (verb, args, List.map fst namedArgs))) )
 
 let calling verb args namedArgs target = call_exn target verb args namedArgs
 let get = calling "get" [] []
@@ -270,10 +299,6 @@ exception InvalidMAST of (string * int)
 
 let throw_invalid_mast ic message = raise (InvalidMAST (message, pos_in ic))
 
-type mspan =
-  | OneToOne of (Z.t * Z.t * Z.t * Z.t)
-  | Blob of (Z.t * Z.t * Z.t * Z.t)
-
 let input_span ic =
   match input_char ic with
   | 'S' ->
@@ -283,26 +308,18 @@ let input_span ic =
       Blob (input_varint ic, input_varint ic, input_varint ic, input_varint ic)
   | _ -> throw_invalid_mast ic "input_span"
 
-let string_of_span span =
-  let sos (x1, y1, x2, y2) =
-    String.concat ":" (List.map Z.to_string [x1; y1; x2; y2]) in
-  match span with OneToOne t -> "str:" ^ sos t | Blob t -> "blob:" ^ sos t
-
-exception Ejecting of (monte * monte)
-exception DoubleThrown
-
 let ejectTo span =
   let ej =
     object (self)
       val mutable thrown = false
 
       method disable =
-        if thrown then raise DoubleThrown ;
+        if thrown then raise (MonteException DoubleThrown) ;
         thrown <- true
 
       method private throw v =
         self#disable ;
-        raise (Ejecting (v, to_monte self))
+        raise (MonteException (Ejecting (v, to_monte self)))
 
       method call verb args namedArgs =
         match (verb, args) with
@@ -316,10 +333,10 @@ let ejectTo span =
     end in
   (to_monte ej, fun () -> ej#disable)
 
-exception WrongType
-
 let unwrapList specimen =
-  match specimen#unwrap with Some (MList l) -> l | _ -> raise WrongType
+  match specimen#unwrap with
+  | Some (MList l) -> l
+  | _ -> raise (MonteException WrongType)
 
 let const k _ = k
 
@@ -331,8 +348,6 @@ let rec sequence actions =
   | [] -> State.return []
 
 let lazyState f s = f () s
-
-exception UserException of mspan
 
 module Compiler = struct
   type span = mspan
@@ -357,7 +372,7 @@ module Compiler = struct
     State.bind State.get (fun env ->
         match Dict.find_opt n env with
         | Some b -> State.return (get (get b))
-        | None -> raise (UserException span))
+        | None -> raise (MonteException (UserException span)))
 
   let nullExpr span = nounExpr "null" span
 
@@ -365,7 +380,7 @@ module Compiler = struct
     State.bind State.get (fun env ->
         match Dict.find_opt n env with
         | Some b -> State.return b
-        | None -> raise (UserException span))
+        | None -> raise (MonteException (UserException span)))
 
   let seqExpr exprs _ =
     List.fold_left
@@ -378,7 +393,7 @@ module Compiler = struct
             State.bind (sequence namedArgs) (fun na ->
                 match t#call verb a na with
                 | Some o -> State.return o
-                | None -> raise (UserException span))))
+                | None -> raise (MonteException (UserException span)))))
 
   let defExpr patt exitOpt expr span =
     State.bind expr (fun e ->
@@ -397,7 +412,8 @@ module Compiler = struct
             try
               let x, _ = body s in
               disable () ; State.return x
-            with Ejecting (o, thrower) when thrower == ej -> State.return o))
+            with MonteException (Ejecting (o, thrower)) when thrower == ej ->
+              State.return o))
 
   let escapeCatchExpr patt body cpatt cbody span =
     lazyState (fun () ->
@@ -408,7 +424,7 @@ module Compiler = struct
             try
               let x, _ = body s in
               disable () ; State.return x
-            with Ejecting (o, thrower) when thrower == ej ->
+            with MonteException (Ejecting (o, thrower)) when thrower == ej ->
               State.and_then (cpatt o nullObj) cbody))
 
   let objectExpr doc namePatt asExpr auditors meths matchs span =
@@ -454,16 +470,17 @@ module Compiler = struct
         State.and_then (State.modify (Dict.add name rv)) (State.return rv))
 
   let tryExpr body patt catcher span s =
-    (* XXX sealed *)
     try body s
-    with UserException _ -> State.and_then (patt nullObj nullObj) catcher s
+    with MonteException ex -> (
+      match ex with
+      (* Ejectors unwind at try-exprs, but do not run their catchers. *)
+      | Ejecting _ -> raise (MonteException ex)
+      (* XXX sealed *)
+      | _ -> State.and_then (patt nullObj nullObj) catcher s )
 
   let finallyExpr body unwinder span env =
-    try body env with
-    (* XXX this would not need duplication if factored into a
-             * subvariant somehow *)
-    | UserException s -> unwinder env ; raise (UserException s)
-    | Ejecting p -> unwinder env ; raise (Ejecting p)
+    try body env
+    with MonteException m -> unwinder env ; raise (MonteException m)
 
   let hideExpr expr _ = expr
 
@@ -472,7 +489,7 @@ module Compiler = struct
     State.bind test (fun t ->
         match t#unwrap with
         | Some (MBool b) -> if b then cons else alt'
-        | _ -> raise (UserException span))
+        | _ -> raise (MonteException (UserException span)))
 
   let metaStateExpr span =
     State.return
@@ -797,9 +814,5 @@ let () =
     try
       let result, _ = expr safeScope in
       Printf.printf "==> %s\n" result#stringOf
-    with
-    | Refused (verb, args, namedArgs) ->
-        Printf.printf "Refused: XXX.%s(...)\n" verb
-    | UserException span ->
-        Printf.printf "UserException at %s\n" (string_of_span span)
+    with MonteException m -> Printf.printf "%s\n" (string_of_mexn m)
   done
