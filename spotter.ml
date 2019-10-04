@@ -237,9 +237,10 @@ let varSlotObj value : monte =
   end
 
 let safeScope =
-  Dict.add "null"
-    (bindingObj (finalSlotObj nullObj))
-    (Dict.add "_makeList" (bindingObj (finalSlotObj _makeList)) Dict.empty)
+  Dict.of_seq
+    (List.to_seq
+       [ ("null", bindingObj (finalSlotObj nullObj))
+       ; ("_makeList", bindingObj (finalSlotObj _makeList)) ])
 
 type mspan =
   | OneToOne of (Z.t * Z.t * Z.t * Z.t)
@@ -802,8 +803,6 @@ let read_mast filename =
   let context = M.make in
   let rv = context#eat_last_expr ic in
   close_in ic ; rv
-
-let safeScope = Dict.add "null" (bindingObj (finalSlotObj nullObj)) Dict.empty
 
 let () =
   for i = 1 to Array.length Sys.argv - 1 do
