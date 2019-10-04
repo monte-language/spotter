@@ -608,13 +608,15 @@ exception InvalidMagic
 
 let mast_magic = "Mont\xe0MAST\x01"
 
-let open_in_mast path =
-  let ic = open_in_bin path in
+let check_magic ic =
   (* Check the magic number. *)
   for i = 0 to String.length mast_magic - 1 do
     if input_char ic <> mast_magic.[i] then (close_in ic ; raise InvalidMagic)
-  done ;
-  ic
+  done
+
+let open_in_mast open_in_bin path =
+  let ic = open_in_bin path in
+  check_magic ic ; ic
 
 module MASTContext (Monte : MAST) = struct
   type masthack =
@@ -813,10 +815,102 @@ end
 
 module M = MASTContext (Compiler)
 
-let read_mast filename =
-  let ic = open_in_mast filename in
+exception NotImplemented of string
+
+module ASTPrinter = struct
+  type span = unit
+
+  let oneToOne _ = ()
+  let blob _ = ()
+
+  type t = string list
+  type patt = string list
+  type narg = string list
+  type nparam = string list
+  type meth = string list
+  type matcher = string list
+
+  let rec sepBy (sep : string) (parts : string list list) : string list =
+    match parts with
+    | [] -> []
+    | [p] -> p
+    | p0 :: ps -> p0 @ [sep] @ sepBy sep ps
+
+  let charExpr i _s =
+    [ ( if i < 128 then Char.escaped (Char.chr i)
+      else raise (NotImplemented "non-ascii char") ) ]
+
+  let doubleExpr f _s = [Printf.sprintf "%f" f]
+  let intExpr z _s = [Printf.sprintf "%d" (Z.to_int z)]
+  let strExpr str _s = ["\""; str; "\""] (* XXX quoting *)
+
+  let nounExpr n _s = [n] (* XXX escaping *)
+
+  let bindingExpr n _s = ["&&" ^ n] (* XXX escaping *)
+
+  let seqExpr parts _s : t = sepBy "; " parts
+
+  let callExpr target verb args nargs _s =
+    match nargs with
+    | [] -> target @ ["."; verb; "("] @ sepBy ", " args @ [")"]
+    | _ -> raise (NotImplemented "printing named args")
+
+  let defExpr patt exitOpt expr _span =
+    match exitOpt with
+    | None -> ["def"; " "] @ patt @ [" "; ":="] @ expr
+    | _ -> raise (NotImplemented "def with exit")
+
+  let escapeExpr patt body span = raise (NotImplemented "escape")
+
+  let escapeCatchExpr patt body cpatt cbody span =
+    raise (NotImplemented "catch")
+
+  let objectExpr doc namePatt asExpr auditors meths matchs span =
+    raise (NotImplemented "object")
+
+  let assignExpr name rhs span = raise (NotImplemented "assign")
+
+  let tryExpr body patt catcher _ =
+    ["try { "] @ body @ ["} catch ("] @ patt @ [")"] @ ["{"] @ catcher @ ["}"]
+
+  let finallyExpr body unwinder span = raise (NotImplemented "finally")
+  let hideExpr expr _ = raise (NotImplemented "hide")
+  let ifExpr test alt cons span = raise (NotImplemented "if")
+  let metaStateExpr span = raise (NotImplemented "metaState")
+  let metaContextExpr span = raise (NotImplemented "metaContext")
+
+  let metho doc verb patts nparams rguard body span =
+    raise (NotImplemented "metho")
+
+  let matche patt body span = raise (NotImplemented "matche")
+  let namedArg key value span = raise (NotImplemented "namedArg")
+  let namedParam key patt default span = raise (NotImplemented "namedParam")
+
+  let ignorePatt guardOpt span =
+    match guardOpt with None -> ["_"] | Some g -> ["_: "] @ g
+
+  let finalPatt noun guardOpt span =
+    match guardOpt with None -> [noun] | Some g -> [noun; " : "] @ g
+
+  let varPatt noun guard span = raise (NotImplemented "var")
+  let listPatt patts span = raise (NotImplemented "listPatt")
+  let viaPatt transformer patt span = raise (NotImplemented "via")
+  let bindingPatt noun span = raise (NotImplemented "bindingPatt")
+end
+
+module MP = MASTContext (ASTPrinter)
+
+let read_mast_chan ic =
   let context = M.make in
-  let rv = context#eat_last_expr ic in
+  context#eat_last_expr ic
+
+let print_mast_chan ic =
+  let context = MP.make in
+  context#eat_last_expr ic
+
+let read_mast filename =
+  let ic = open_in_mast open_in_bin filename in
+  let rv = read_mast_chan ic in
   close_in ic ; rv
 
 let () =
