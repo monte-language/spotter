@@ -539,8 +539,7 @@ module Compiler = struct
             State.return s)
 
   let ignorePatt guardOpt span specimen exit =
-    State.bind (coerceOpt guardOpt specimen exit) (fun _prize ->
-        State.return ())
+    State.map (fun _ -> ()) (coerceOpt guardOpt specimen exit)
 
   let finalPatt noun guard span specimen exit =
     State.bind (coerceOpt guard specimen exit) (fun s ->
