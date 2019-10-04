@@ -147,14 +147,14 @@ let rec intObj i : monte =
       match (verb, args) with
       | "next", [] -> Some (intObj (Z.succ i))
       | "previous", [] -> Some (intObj (Z.pred i))
-      | "add", [jj] ->
-         (match jj#unwrap with
-          | Some (MInt j) -> Some (intObj (Z.add i j))
-          | _ -> None)
-      | "multiply", [jj] ->
-         (match jj#unwrap with
-          | Some (MInt j) -> Some (intObj (Z.mul i j))
-          | _ -> None)
+      | "add", [jj] -> (
+        match jj#unwrap with
+        | Some (MInt j) -> Some (intObj (Z.add i j))
+        | _ -> None )
+      | "multiply", [jj] -> (
+        match jj#unwrap with
+        | Some (MInt j) -> Some (intObj (Z.mul i j))
+        | _ -> None )
       | _ -> None
 
     method stringOf = Z.to_string i
@@ -191,10 +191,10 @@ let rec listObj l : monte =
 let _makeList : monte =
   object
     method call verb args namedArgs =
-      match (verb, args) with
-      | "run", _ -> Some (listObj args)
-      | _ -> None
+      match (verb, args) with "run", _ -> Some (listObj args) | _ -> None
+
     method stringOf = "_makeList"
+
     method unwrap = None
   end
 
@@ -236,7 +236,8 @@ let varSlotObj value : monte =
   end
 
 let safeScope =
-  Dict.add "null" (bindingObj (finalSlotObj nullObj))
+  Dict.add "null"
+    (bindingObj (finalSlotObj nullObj))
     (Dict.add "_makeList" (bindingObj (finalSlotObj _makeList)) Dict.empty)
 
 exception Refused of (string * monte list * monte list)
@@ -335,9 +336,7 @@ let lazyState f s = f () s
 
 exception UserException of mspan
 
-let maybe d opt = match opt with
-  | Some a -> a
-  | None -> d
+let maybe d opt = match opt with Some a -> a | None -> d
 
 module Compiler = struct
   type span = mspan
@@ -389,9 +388,9 @@ module Compiler = struct
     State.bind expr (fun e ->
         match exitOpt with
         | Some exit ->
-           State.bind exit (fun x -> State.and_then (patt e x) (State.return e))
-        | None -> State.and_then (patt e nullObj) (State.return e)
-      )
+            State.bind exit (fun x ->
+                State.and_then (patt e x) (State.return e) )
+        | None -> State.and_then (patt e nullObj) (State.return e) )
 
   let escapeExpr patt body span =
     lazyState (fun () ->
@@ -477,7 +476,7 @@ module Compiler = struct
   let hideExpr expr _ = expr
 
   let ifExpr test cons alt span =
-      let alt' = maybe (nullExpr span) alt in
+    let alt' = maybe (nullExpr span) alt in
     State.bind test (fun t ->
         match t#unwrap with
         | Some (MBool b) -> if b then cons else alt'
@@ -517,17 +516,22 @@ module Compiler = struct
         (* XXX uses OCaml equality!! *)
         match List.assoc_opt k map with
         | Some value -> patt value nullObj
-        | None -> State.bind (maybe (nullExpr span) default) (const (State.return ())) )
+        | None ->
+            State.bind
+              (maybe (nullExpr span) default)
+              (const (State.return ())) )
 
-  let coerceOpt guardOpt specimen exit = match guardOpt with
+  let coerceOpt guardOpt specimen exit =
+    match guardOpt with
     | None -> State.return specimen
-    | Some guard -> State.bind guard (fun g ->
-                        let s = call_exn g "coerce" [specimen; exit] [] in
-                        State.return s)
+    | Some guard ->
+        State.bind guard (fun g ->
+            let s = call_exn g "coerce" [specimen; exit] [] in
+            State.return s )
 
   let ignorePatt guardOpt span specimen exit =
     State.bind (coerceOpt guardOpt specimen exit) (fun _prize ->
-        State.return ())
+        State.return () )
 
   let finalPatt noun guard span specimen exit =
     State.bind (coerceOpt guard specimen exit) (fun s ->
@@ -689,21 +693,25 @@ module MASTContext (Monte : MAST) = struct
             let p = self#eat_patt ic and e = self#eat_expr ic in
             exprs#push (HMatch (Monte.matche p e (self#eat_span ic)))
         | 'L' ->
-           exprs#push (
-               match logged "literal tag" (input_char ic) with
-               | 'N' -> ignore (self#eat_span ic); HNone
-               | tag ->
-                  let e = match tag with
-                    |'I' ->
-                      let i = input_varint ic in
-                      let shifted = Z.shift_right i 1 in
-                      Monte.intExpr
-                        ( if Z.testbit i 0 then Z.logxor (Z.of_int (-1)) shifted
+            exprs#push
+              ( match logged "literal tag" (input_char ic) with
+              | 'N' ->
+                  ignore (self#eat_span ic) ;
+                  HNone
+              | tag ->
+                  let e =
+                    match tag with
+                    | 'I' ->
+                        let i = input_varint ic in
+                        let shifted = Z.shift_right i 1 in
+                        Monte.intExpr
+                          ( if Z.testbit i 0 then
+                            Z.logxor (Z.of_int (-1)) shifted
                           else shifted )
                     | 'S' -> Monte.strExpr (input_str ic)
                     | x -> throw_invalid_mast ic ("literal:" ^ Char.escaped x)
                   in
-                  HExpr (e (self#eat_span ic)))
+                  HExpr (e (self#eat_span ic)) )
         | tag ->
             let expr =
               match logged "expr tag" tag with
