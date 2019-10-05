@@ -418,12 +418,14 @@ module Compiler = struct
                 State.return (call_exn verb a na))))
 
   let defExpr patt exitOpt expr span =
-    State.bind expr (fun e ->
-        match exitOpt with
-        | Some exit ->
+    match exitOpt with
+    | Some exit ->
+        State.bind expr (fun e ->
             State.bind exit (fun x ->
-                State.and_then (patt e x) (State.return e))
-        | None -> State.and_then (patt e nullObj) (State.return e))
+                State.and_then (patt e x) (State.return e)))
+    | None ->
+        State.bind expr (fun e ->
+            State.and_then (patt e nullObj) (State.return e))
 
   let escapeExpr patt body span =
     lazyState (fun () ->
