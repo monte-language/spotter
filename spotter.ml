@@ -277,8 +277,9 @@ type mexn =
   | Refused of (string * monte list * monte list)
   | Ejecting of (monte * monte)
   | DoubleThrown
-  | WrongType
-  | UserException of (string * mspan)
+  | WrongType of (monteprim * monte)
+  | NameError of (string * mspan)
+  | UserException of (monte * mspan)
 
 let string_of_mexn m =
   match m with
@@ -288,9 +289,22 @@ let string_of_mexn m =
       "Ejector: " ^ ej#stringOf ^ "(" ^ payload#stringOf ^ ")"
   | DoubleThrown ->
       "An ejector has come forward with a complaint of being thrown...twice!"
-  | WrongType -> "Wrong type while unwrapping data object"
-  | UserException (msg, span) ->
-      "User-created exception at span " ^ string_of_span span ^ ": " ^ msg
+  | WrongType (expected, actual) ->
+      let prim_type =
+        match expected with
+        | MNull -> "Null"
+        | MBool _ -> "Bool"
+        | MChar _ -> "Char"
+        | MDouble _ -> "Double"
+        | MInt _ -> "Int"
+        | MStr _ -> "Str"
+        | MList _ -> "List" in
+      "Wrong type while unwrapping " ^ prim_type ^ ": " ^ actual#stringOf
+  | NameError (name, span) ->
+      "name error at " ^ string_of_span span ^ ": " ^ name
+  | UserException (value, span) ->
+      "User-created exception at span " ^ string_of_span span ^ ": "
+      ^ value#stringOf
 
 exception MonteException of mexn
 
@@ -359,12 +373,12 @@ let ejectTo span =
 let unwrapBool specimen =
   match specimen#unwrap with
   | Some (MBool b) -> b
-  | _ -> raise (MonteException WrongType)
+  | _ -> raise (MonteException (WrongType (MBool true, specimen)))
 
 let unwrapList specimen =
   match specimen#unwrap with
   | Some (MList l) -> l
-  | _ -> raise (MonteException WrongType)
+  | _ -> raise (MonteException (WrongType (MList [], specimen)))
 
 let const k _ = k
 
@@ -400,8 +414,7 @@ module Compiler = struct
     State.bind State.get (fun env ->
         match Dict.find_opt n env with
         | Some b -> State.return (get (get b))
-        | None ->
-            raise (MonteException (UserException ("no such noun: " ^ n, span))))
+        | None -> raise (MonteException (NameError (n, span))))
 
   let nullExpr span = nounExpr "null" span
 
@@ -409,9 +422,7 @@ module Compiler = struct
     State.bind State.get (fun env ->
         match Dict.find_opt n env with
         | Some b -> State.return b
-        | None ->
-            raise
-              (MonteException (UserException ("no such binding: " ^ n, span))))
+        | None -> raise (MonteException (NameError ("&&" ^ n, span))))
 
   let seqExpr exprs _ =
     List.fold_left
