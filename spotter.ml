@@ -632,7 +632,7 @@ module MASTContext (Monte : MAST) = struct
       (Z.to_string i3) (Z.to_string i4) ;
     (i1, i2, i3, i4)
 
-  let make =
+  let make () =
     object (self)
       (* Compared to the classic MAST context, we store the exprs and patts
          * backwards, so that we can build them quickly. *)
@@ -815,7 +815,7 @@ module M = MASTContext (Compiler)
 
 let read_mast filename =
   let ic = open_in_mast filename in
-  let context = M.make in
+  let context = M.make () in
   let rv = context#eat_last_expr ic in
   close_in ic ; rv
 
