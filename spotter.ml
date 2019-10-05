@@ -84,7 +84,14 @@ module type MAST = sig
   val escapeCatchExpr : patt -> t -> patt -> t -> span -> t
 
   val objectExpr :
-    string -> patt -> t -> t list -> meth list -> matcher list -> span -> t
+       string
+    -> patt
+    -> t option
+    -> t list
+    -> meth list
+    -> matcher list
+    -> span
+    -> t
 
   val assignExpr : string -> t -> span -> t
   val tryExpr : t -> patt -> t -> span -> t
@@ -469,13 +476,15 @@ module Compiler = struct
             with MonteException (Ejecting (o, thrower)) when thrower == ej ->
               State.and_then (cpatt o nullObj) cbody))
 
-  let objectExpr doc namePatt asExpr auditors meths matchs span =
+  let objectExpr doc namePatt asOpt auditors meths matchs span =
     let methdict =
       List.fold_left
         (fun d (v, ps, nps, body) ->
           AtomDict.add (v, List.length ps) (ps, nps, body) d)
         AtomDict.empty meths in
-    State.bind asExpr (fun ase ->
+    State.bind
+      (Option.value asOpt ~default:(State.return nullObj))
+      (fun ase ->
         State.bind (sequence auditors) (fun auds (* XXX rebind into env *) s ->
             ( object (self)
                 (* XXX method dispatch, matcher dispatch *)
@@ -793,7 +802,7 @@ module MASTContext (Monte : MAST) = struct
                   (* Object with no script, just direct methods and matchers. *)
                   let doc = input_str ic in
                   let patt = self#eat_patt ic in
-                  let asExpr = self#eat_expr ic in
+                  let asExpr = self#eat_expr_opt ic in
                   let implements = input_many self#eat_expr ic in
                   let methods = input_many self#eat_method ic in
                   let matchers = input_many self#eat_matcher ic in
