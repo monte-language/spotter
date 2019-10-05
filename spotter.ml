@@ -415,7 +415,7 @@ module Compiler = struct
     State.bind target (fun t ->
         State.bind (sequence args) (fun a ->
             State.bind (sequence namedArgs) (fun na ->
-                State.return (call_exn verb a na))))
+                State.return (call_exn t verb a na))))
 
   let defExpr patt exitOpt expr span =
     match exitOpt with
@@ -510,13 +510,7 @@ module Compiler = struct
 
   let ifExpr test cons alt span =
     let alt' = Option.value alt ~default:(nullExpr span) in
-    State.bind test (fun t ->
-        match unwrapBool t with
-        | Some b -> if b then cons else alt'
-        | None ->
-            raise
-              (MonteException
-                 (UserException ("expected bool: " ^ t#stringOf, span))))
+    State.bind test (fun t -> if unwrapBool t then cons else alt')
 
   let metaStateExpr span =
     State.return
@@ -707,7 +701,6 @@ module MASTContext (Monte : MAST) = struct
                   let s = input_str ic in
                   Monte.bindingPatt s (self#eat_span ic)
               | x -> throw_invalid_mast ic "patt" )
-        (* XXX code chars might not be right *)
         | 'M' ->
             let eat_nparam ic =
               let ek = self#eat_expr ic
@@ -722,7 +715,6 @@ module MASTContext (Monte : MAST) = struct
             and b = self#eat_expr ic in
             exprs#push
               (HMeth (Monte.metho doc verb ps nps g b (self#eat_span ic)))
-        (* XXX this one too *)
         | 'R' ->
             let p = self#eat_patt ic and e = self#eat_expr ic in
             exprs#push (HMatch (Monte.matche p e (self#eat_span ic)))
