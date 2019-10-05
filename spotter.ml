@@ -833,7 +833,7 @@ module ASTPrinter = struct
   type matcher = t
 
   let p ff x = x ff
-  let comma ppf : unit = fprintf ppf ",@,"
+  let comma ppf : unit = fprintf ppf ",@ "
 
   (* XXX couldn't figure out pp_print_list *)
   let rec print_items ppf a : unit =
@@ -844,6 +844,7 @@ module ASTPrinter = struct
 
   let charExpr i _s ppf =
     if i < 128 then fprintf ppf "'%s'" (Char.escaped (Char.chr i))
+      (* XXX escaping *)
     else raise (NotImplemented "non-ascii char")
 
   let doubleExpr f _s ppf = fprintf ppf "%f" f
@@ -854,18 +855,17 @@ module ASTPrinter = struct
 
   let bindingExpr n _s ppf = fprintf ppf "&&%s" n (* XXX escaping *)
 
-  let rec seqExpr exprs s ppf : unit =
-    match exprs with
-    | [] -> ()
-    | e0 :: es ->
-        e0 ppf ;
-        pp_print_string ppf ";" ;
-        pp_print_cut ppf () ;
-        seqExpr es s ppf
+  let seqExpr exprs s ppf : unit =
+    let rec loop ppf exs =
+      match exs with
+      | [] -> ()
+      | [e1] -> e1 ppf
+      | e0 :: es -> fprintf ppf "%a;@ %a" p e0 loop es in
+    fprintf ppf "@[<v>%a@]" loop exprs
 
   let callExpr target verb args nargs _s (ppf : formatter) =
     match nargs with
-    | [] -> fprintf ppf "%a.%s(@[<hv 2>@,%a@])" p target verb print_items args
+    | [] -> fprintf ppf "%a.%s(@[<hov 0>@,%a@])" p target verb print_items args
     | _ -> raise (NotImplemented "printing named args")
 
   let defExpr patt exitOpt expr _span ppf =
@@ -873,14 +873,15 @@ module ASTPrinter = struct
       match nodeOpt with
       | Some node -> fprintf ppf "@ %s@ %a" token p node
       | None -> () in
-    fprintf ppf "def %a%a := %a" p patt (print_opt "exit") exitOpt p expr
+    fprintf ppf "@[<hov 2>def %a%a :=@ %a@]" p patt (print_opt "exit") exitOpt
+      p expr
 
   let escapeExpr patt body span ppf =
-    fprintf ppf "escape @[%a@]@ @[{@;%a}@]" p patt p body
+    fprintf ppf "escape @[%a@]@ {@[<v>@;%a@]}" p patt p body
 
   let escapeCatchExpr patt body cpatt cbody span ppf =
-    fprintf ppf "escape %a { %a } catch %a { %a }" p patt p body p cpatt p
-      cbody
+    fprintf ppf "@[<hv 2>escape %a {@;%a@,}@]@ @[<hv 2>catch %a {@;%a@;}@]" p
+      patt p body p cpatt p cbody
 
   let objectExpr doc namePatt asExpr auditors meths matchs span ppf =
     (* XXX TODO: asExpr, auditors, matchs *)
@@ -897,9 +898,9 @@ module ASTPrinter = struct
   let hideExpr expr _ ppf = fprintf ppf "{@[%a@]}" p expr
 
   let ifExpr test cons alt span ppf =
-    fprintf ppf "if @[<hv>(%a)@] @[<v>{@;%a@;}@]" p test p cons ;
+    fprintf ppf "@[<v 2>if @[<hov 1>(%a@]) {@ %a@;@]}" p test p cons ;
     match alt with
-    | Some e -> fprintf ppf "@ else@ @[<v>{%a}@]" p e
+    | Some e -> fprintf ppf "@ @[<v 2>else {@ %a@;}@]" p e
     | None -> ()
 
   let metaStateExpr span = raise (NotImplemented "metaState")
