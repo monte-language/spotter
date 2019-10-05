@@ -950,18 +950,24 @@ let print_mast_chan ic =
   let context = MP.make in
   context#eat_last_expr ic
 
-let read_mast filename =
-  let ic = open_in_mast open_in_bin filename in
-  let rv = read_mast_chan ic in
-  close_in ic ; rv
-
 let () =
-  for i = 1 to Array.length Sys.argv - 1 do
-    Printf.printf "[%i] %s\n" i Sys.argv.(i) ;
-    let filename = Sys.argv.(i) in
-    let expr = read_mast filename in
+  let read_mast filename =
+    let ic = open_in_mast open_in_bin filename in
+    let rv = read_mast_chan ic in
+    close_in ic ; rv
+  and run_expr expr =
     try
       let result, _ = expr safeScope in
       Printf.printf "==> %s\n" result#stringOf
-    with MonteException m -> Printf.printf "%s\n" (string_of_mexn m)
+    with MonteException m -> Printf.eprintf "%s\n" (string_of_mexn m) in
+  let print_mast filename =
+    let ic = open_in_mast open_in_bin filename in
+    print_mast_chan ic Format.std_formatter ;
+    Format.pp_print_newline Format.std_formatter () ;
+    close_in ic in
+  for i = 1 to Array.length Sys.argv - 1 do
+    let filename = Sys.argv.(i) in
+    Printf.printf "[%i] %s\n" i filename ;
+    print_mast filename ;
+    run_expr (read_mast filename)
   done
