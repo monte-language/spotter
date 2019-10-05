@@ -1,9 +1,5 @@
 open CamomileLibraryDefault.Camomile
 
-let logged label ch =
-  Printf.printf "%s%c..." label ch ;
-  ch
-
 type monte =
   < call: string -> monte list -> (monte * monte) list -> monte option
   ; stringOf: string
@@ -663,6 +659,10 @@ module MASTContext (Monte : MAST) = struct
     Printf.printf "i4:%s,%s,%s,%s\n" (Z.to_string i1) (Z.to_string i2)
       (Z.to_string i3) (Z.to_string i4) ;
     (i1, i2, i3, i4)
+
+  let logged label ch =
+    Printf.printf "%s%c..." label ch ;
+    ch
 
   let make () =
     object (self)
