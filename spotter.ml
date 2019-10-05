@@ -608,13 +608,15 @@ exception InvalidMagic
 
 let mast_magic = "Mont\xe0MAST\x01"
 
-let open_in_mast path =
-  let ic = open_in_bin path in
+let check_magic ic =
   (* Check the magic number. *)
   for i = 0 to String.length mast_magic - 1 do
     if input_char ic <> mast_magic.[i] then (close_in ic ; raise InvalidMagic)
-  done ;
-  ic
+  done
+
+let open_in_mast open_in_bin path =
+  let ic = open_in_bin path in
+  check_magic ic ; ic
 
 module MASTContext (Monte : MAST) = struct
   type masthack =
@@ -813,19 +815,160 @@ end
 
 module M = MASTContext (Compiler)
 
-let read_mast filename =
-  let ic = open_in_mast filename in
+exception NotImplemented of string
+
+module ASTPrinter = struct
+  open Format
+
+  type span = unit
+
+  let oneToOne _ = ()
+  let blob _ = ()
+
+  type t = formatter -> unit
+  type patt = t
+  type narg = t
+  type nparam = t
+  type meth = t
+  type matcher = t
+
+  let p ff x = x ff
+  let comma ppf : unit = fprintf ppf ",@ "
+
+  (* XXX couldn't figure out pp_print_list *)
+  let rec print_items ppf a : unit =
+    match a with
+    | [] -> ()
+    | [a] -> a ppf
+    | a0 :: rest -> a0 ppf ; comma ppf ; print_items ppf rest
+
+  let charExpr i _s ppf =
+    if i < 128 then fprintf ppf "'%s'" (Char.escaped (Char.chr i))
+      (* XXX escaping *)
+    else raise (NotImplemented "non-ascii char")
+
+  let doubleExpr f _s ppf = fprintf ppf "%f" f
+  let intExpr z _s ppf = fprintf ppf "%d" (Z.to_int z)
+  let strExpr str _s ppf = fprintf ppf "\"%s\"" str (* XXX quoting *)
+
+  let nounExpr n _s ppf = fprintf ppf "%s" n (* XXX escaping *)
+
+  let bindingExpr n _s ppf = fprintf ppf "&&%s" n (* XXX escaping *)
+
+  let seqExpr exprs s ppf : unit =
+    let rec loop ppf exs =
+      match exs with
+      | [] -> ()
+      | [e1] -> e1 ppf
+      | e0 :: es -> fprintf ppf "%a;@ %a" p e0 loop es in
+    fprintf ppf "@[<v>%a@]" loop exprs
+
+  let callExpr target verb args nargs _s (ppf : formatter) =
+    match nargs with
+    | [] -> fprintf ppf "%a.%s(@[<hov 0>@,%a@])" p target verb print_items args
+    | _ -> raise (NotImplemented "printing named args")
+
+  let defExpr patt exitOpt expr _span ppf =
+    let print_opt token ppf nodeOpt =
+      match nodeOpt with
+      | Some node -> fprintf ppf "@ %s@ %a" token p node
+      | None -> () in
+    fprintf ppf "@[<hov 2>def %a%a :=@ %a@]" p patt (print_opt "exit") exitOpt
+      p expr
+
+  let escapeExpr patt body span ppf =
+    fprintf ppf "escape @[%a@]@ {@[<v>@;%a@]}" p patt p body
+
+  let escapeCatchExpr patt body cpatt cbody span ppf =
+    fprintf ppf "@[<hv 2>escape %a {@;%a@,}@]@ @[<hv 2>catch %a {@;%a@;}@]" p
+      patt p body p cpatt p cbody
+
+  let objectExpr doc namePatt asExpr auditors meths matchs span ppf =
+    (* XXX TODO: asExpr, auditors, matchs *)
+    fprintf ppf "object %a { %a }" p namePatt
+      (* XXX items is goofy *) print_items meths
+
+  let assignExpr name rhs span ppf = fprintf ppf "%s := @[%a@]" name p rhs
+
+  let tryExpr body patt catcher _ ppf =
+    fprintf ppf "try @[<v>{@;%a}@;@]@ catch %a@ @[<hv>{@;%a}@;@] " p body p
+      patt p catcher
+
+  let finallyExpr body unwinder span = raise (NotImplemented "finally")
+  let hideExpr expr _ ppf = fprintf ppf "{@[%a@]}" p expr
+
+  let ifExpr test cons alt span ppf =
+    fprintf ppf "@[<v 2>if @[<hov 1>(%a@]) {@ %a@;@]}" p test p cons ;
+    match alt with
+    | Some e -> fprintf ppf "@ @[<v 2>else {@ %a@;}@]" p e
+    | None -> ()
+
+  let metaStateExpr span = raise (NotImplemented "metaState")
+  let metaContextExpr span = raise (NotImplemented "metaContext")
+
+  let metho doc verb patts nparams rguard body span ppf =
+    match doc with
+    | "" -> (
+      match nparams with
+      | [] ->
+          fprintf ppf "method %s @[<h>(%a)@] @[<v 2>{@;%a}@]" verb print_items
+            patts p body
+      | _ -> raise (NotImplemented "named params in method") )
+    | _ -> raise (NotImplemented "method doc")
+
+  let matche patt body span = raise (NotImplemented "matche")
+  let namedArg key value span = raise (NotImplemented "namedArg")
+  let namedParam key patt default span = raise (NotImplemented "namedParam")
+
+  let printGuardOpt ppf g : unit =
+    match g with None -> () | Some gg -> fprintf ppf ": @[%a@]" p gg
+
+  (* XXX parens? *)
+
+  let ignorePatt guardOpt span ppf = fprintf ppf "_%a" printGuardOpt guardOpt
+
+  let finalPatt noun guardOpt span ppf =
+    fprintf ppf "%s%a" noun printGuardOpt guardOpt
+
+  let varPatt noun guardOpt span ppf =
+    fprintf ppf "var %s%a" noun printGuardOpt guardOpt
+
+  let listPatt patts span ppf = fprintf ppf "@[[%a]@]" print_items patts
+
+  let viaPatt transformer patt span ppf =
+    fprintf ppf "via (%a) %a" p transformer p patt
+
+  let bindingPatt noun span ppf = fprintf ppf "&&%s" noun
+end
+
+module MP = MASTContext (ASTPrinter)
+
+let read_mast_chan ic =
   let context = M.make in
-  let rv = context#eat_last_expr ic in
-  close_in ic ; rv
+  context#eat_last_expr ic
+
+let print_mast_chan ic =
+  let context = MP.make in
+  context#eat_last_expr ic
 
 let () =
-  for i = 1 to Array.length Sys.argv - 1 do
-    Printf.printf "[%i] %s\n" i Sys.argv.(i) ;
-    let filename = Sys.argv.(i) in
-    let expr = read_mast filename in
+  let read_mast filename =
+    let ic = open_in_mast open_in_bin filename in
+    let rv = read_mast_chan ic in
+    close_in ic ; rv
+  and run_expr expr =
     try
       let result, _ = expr safeScope in
       Printf.printf "==> %s\n" result#stringOf
-    with MonteException m -> Printf.printf "%s\n" (string_of_mexn m)
+    with MonteException m -> Printf.eprintf "%s\n" (string_of_mexn m) in
+  let print_mast filename =
+    let ic = open_in_mast open_in_bin filename in
+    print_mast_chan ic Format.std_formatter ;
+    Format.pp_print_newline Format.std_formatter () ;
+    close_in ic in
+  for i = 1 to Array.length Sys.argv - 1 do
+    let filename = Sys.argv.(i) in
+    Printf.printf "[%i] %s\n" i filename ;
+    print_mast filename ;
+    run_expr (read_mast filename)
   done
