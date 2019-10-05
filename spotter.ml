@@ -819,6 +819,7 @@ exception NotImplemented of string
 
 module ASTPrinter = struct
   open Format
+
   type span = unit
 
   let oneToOne _ = ()
@@ -832,77 +833,110 @@ module ASTPrinter = struct
   type matcher = t
 
   let p ff x = x ff
-  let comma ppf: unit = fprintf ppf ",@,"
+  let comma ppf : unit = fprintf ppf ",@,"
+
   (* XXX couldn't figure out pp_print_list *)
-  let rec print_items ppf a: unit = match a with
+  let rec print_items ppf a : unit =
+    match a with
     | [] -> ()
     | [a] -> a ppf
-    | a0::rest -> a0 ppf; comma ppf; print_items ppf rest
+    | a0 :: rest -> a0 ppf ; comma ppf ; print_items ppf rest
 
-  let charExpr i _s ppf = if i < 128 then fprintf ppf "'%s'" (Char.escaped (Char.chr i))
-                          else (raise (NotImplemented "non-ascii char"))
+  let charExpr i _s ppf =
+    if i < 128 then fprintf ppf "'%s'" (Char.escaped (Char.chr i))
+    else raise (NotImplemented "non-ascii char")
+
   let doubleExpr f _s ppf = fprintf ppf "%f" f
   let intExpr z _s ppf = fprintf ppf "%d" (Z.to_int z)
   let strExpr str _s ppf = fprintf ppf "\"%s\"" str (* XXX quoting *)
+
   let nounExpr n _s ppf = fprintf ppf "%s" n (* XXX escaping *)
+
   let bindingExpr n _s ppf = fprintf ppf "&&%s" n (* XXX escaping *)
-  let rec seqExpr exprs s ppf: unit = match exprs with
+
+  let rec seqExpr exprs s ppf : unit =
+    match exprs with
     | [] -> ()
     | e0 :: es ->
-       e0 ppf;
-       pp_print_string ppf ";";
-       pp_print_cut ppf ();
-       seqExpr es s ppf
-  let callExpr target verb args nargs _s (ppf: formatter) =
+        e0 ppf ;
+        pp_print_string ppf ";" ;
+        pp_print_cut ppf () ;
+        seqExpr es s ppf
+
+  let callExpr target verb args nargs _s (ppf : formatter) =
     match nargs with
     | [] -> fprintf ppf "%a.%s(@[<hv 2>@,%a@])" p target verb print_items args
     | _ -> raise (NotImplemented "printing named args")
+
   let defExpr patt exitOpt expr _span ppf =
     let print_opt token ppf nodeOpt =
       match nodeOpt with
       | Some node -> fprintf ppf "@ %s@ %a" token p node
-      | None -> ()
-    in
+      | None -> () in
     fprintf ppf "def %a%a := %a" p patt (print_opt "exit") exitOpt p expr
+
   let escapeExpr patt body span ppf =
     fprintf ppf "escape @[%a@]@ @[{@;%a}@]" p patt p body
+
   let escapeCatchExpr patt body cpatt cbody span ppf =
-    fprintf ppf "escape %a { %a } catch %a { %a }" p patt p body p cpatt p cbody
+    fprintf ppf "escape %a { %a } catch %a { %a }" p patt p body p cpatt p
+      cbody
+
   let objectExpr doc namePatt asExpr auditors meths matchs span ppf =
     (* XXX TODO: asExpr, auditors, matchs *)
-    fprintf ppf "object %a { %a }" p namePatt (* XXX items is goofy *) print_items meths
+    fprintf ppf "object %a { %a }" p namePatt
+      (* XXX items is goofy *) print_items meths
+
   let assignExpr name rhs span ppf = fprintf ppf "%s := @[%a@]" name p rhs
+
   let tryExpr body patt catcher _ ppf =
-    fprintf ppf "try @[<v>{@;%a}@;@]@ catch %a@ @[<hv>{@;%a}@;@] " p body p patt p catcher
+    fprintf ppf "try @[<v>{@;%a}@;@]@ catch %a@ @[<hv>{@;%a}@;@] " p body p
+      patt p catcher
+
   let finallyExpr body unwinder span = raise (NotImplemented "finally")
   let hideExpr expr _ ppf = fprintf ppf "{@[%a@]}" p expr
+
   let ifExpr test cons alt span ppf =
-    fprintf ppf "if @[<hv>(%a)@] @[<v>{@;%a@;}@]" p test p cons;
+    fprintf ppf "if @[<hv>(%a)@] @[<v>{@;%a@;}@]" p test p cons ;
     match alt with
     | Some e -> fprintf ppf "@ else@ @[<v>{%a}@]" p e
     | None -> ()
+
   let metaStateExpr span = raise (NotImplemented "metaState")
   let metaContextExpr span = raise (NotImplemented "metaContext")
+
   let metho doc verb patts nparams rguard body span ppf =
     match doc with
-    | "" -> (match nparams with
-             | [] -> (fprintf ppf "method %s @[<h>(%a)@] @[<v 2>{@;%a}@]"
-                        verb print_items patts p body)
-             | _ -> raise (NotImplemented "named params in method")
-            )
+    | "" -> (
+      match nparams with
+      | [] ->
+          fprintf ppf "method %s @[<h>(%a)@] @[<v 2>{@;%a}@]" verb print_items
+            patts p body
+      | _ -> raise (NotImplemented "named params in method") )
     | _ -> raise (NotImplemented "method doc")
+
   let matche patt body span = raise (NotImplemented "matche")
   let namedArg key value span = raise (NotImplemented "namedArg")
   let namedParam key patt default span = raise (NotImplemented "namedParam")
-  let printGuardOpt ppf g: unit = match g with
-    | None -> ()
-    | Some gg -> fprintf ppf ": @[%a@]" p gg (* XXX parens? *)
+
+  let printGuardOpt ppf g : unit =
+    match g with None -> () | Some gg -> fprintf ppf ": @[%a@]" p gg
+
+  (* XXX parens? *)
+
   let ignorePatt guardOpt span ppf = fprintf ppf "_%a" printGuardOpt guardOpt
-  let finalPatt noun guardOpt span ppf = fprintf ppf "%s%a" noun printGuardOpt guardOpt
-  let varPatt noun guardOpt span ppf = fprintf ppf "var %s%a" noun printGuardOpt guardOpt
+
+  let finalPatt noun guardOpt span ppf =
+    fprintf ppf "%s%a" noun printGuardOpt guardOpt
+
+  let varPatt noun guardOpt span ppf =
+    fprintf ppf "var %s%a" noun printGuardOpt guardOpt
+
   let listPatt patts span ppf = fprintf ppf "@[[%a]@]" print_items patts
+
   let viaPatt transformer patt span ppf =
     fprintf ppf "via (%a) %a" p transformer p patt
+
   let bindingPatt noun span ppf = fprintf ppf "&&%s" noun
 end
 
