@@ -271,7 +271,7 @@ type mexn =
   | Ejecting of (monte * monte)
   | DoubleThrown
   | WrongType
-  | UserException of mspan
+  | UserException of (string * mspan)
 
 let string_of_mexn m =
   match m with
@@ -282,8 +282,8 @@ let string_of_mexn m =
   | DoubleThrown ->
       "An ejector has come forward with a complaint of being thrown...twice!"
   | WrongType -> "Wrong type while unwrapping data object"
-  | UserException span ->
-      "User-created exception at span " ^ string_of_span span
+  | UserException (msg, span) ->
+      "User-created exception at span " ^ (string_of_span span) ^ ": " ^ msg
 
 exception MonteException of mexn
 
@@ -388,7 +388,8 @@ module Compiler = struct
     State.bind State.get (fun env ->
         match Dict.find_opt n env with
         | Some b -> State.return (get (get b))
-        | None -> raise (MonteException (UserException span)))
+        | None ->
+            raise (MonteException (UserException ("no such noun: " ^ n, span))))
 
   let nullExpr span = nounExpr "null" span
 
@@ -396,7 +397,9 @@ module Compiler = struct
     State.bind State.get (fun env ->
         match Dict.find_opt n env with
         | Some b -> State.return b
-        | None -> raise (MonteException (UserException span)))
+        | None ->
+            raise
+              (MonteException (UserException ("no such binding: " ^ n, span))))
 
   let seqExpr exprs _ =
     List.fold_left
@@ -409,7 +412,10 @@ module Compiler = struct
             State.bind (sequence namedArgs) (fun na ->
                 match t#call verb a na with
                 | Some o -> State.return o
-                | None -> raise (MonteException (UserException span)))))
+                | None ->
+                    raise
+                      (MonteException
+                         (UserException ("no such verb:" ^ verb, span))))))
 
   let defExpr patt exitOpt expr span =
     State.bind expr (fun e ->
@@ -505,7 +511,10 @@ module Compiler = struct
     State.bind test (fun t ->
         match t#unwrap with
         | Some (MBool b) -> if b then cons else alt'
-        | _ -> raise (MonteException (UserException span)))
+        | _ ->
+            raise
+              (MonteException
+                 (UserException ("expected bool: " ^ t#stringOf, span))))
 
   let metaStateExpr span =
     State.return
