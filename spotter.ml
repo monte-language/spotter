@@ -54,6 +54,59 @@ end = struct
   let modify f s = ((), f s)
 end
 
+module UTF8D = struct
+  (** `decode bs` gives either Ok (code, rest) or Error (consumed_bytes, rest) *)
+  let decode1 (bs : int Seq.t) : (int * int Seq.t, int list * int Seq.t) result
+      =
+    let open Int in
+    let mask2 = 0b11000000
+    and mask3 = 0b11100000
+    and mask4 = 0b11110000
+    and mask5 = 0b11111000
+    and mask b m = logand b (lognot m) in
+    let is_0xxxxxxx b = shift_right b 7 = 0b0
+    and is_110xxxxx b = shift_right b 5 = 0b110
+    and is_1110xxxx b = shift_right b 4 = 0b1110
+    and is_11110xxx b = shift_right b 3 = 0b11110
+    and cat hi n lo = logor (shift_left hi n) lo in
+    match bs () with
+    | Nil -> Error ([], bs)
+    | Cons (b0, b1n) when is_0xxxxxxx b0 -> Ok (b0, b1n)
+    | Cons (b0, b1n) -> (
+      match b1n () with
+      | Nil -> Error ([b0], b1n)
+      | Cons (b1, b2n) when is_110xxxxx b0 ->
+          let code = cat (mask b0 mask3) 6 (mask b1 mask2) in
+          Ok (code, b2n)
+      | Cons (b1, b2n) -> (
+        match b2n () with
+        | Nil -> Error ([b0; b1], b2n)
+        | Cons (b2, b3n) when is_1110xxxx b0 ->
+            let code =
+              cat (cat (mask b0 mask4) 6 (mask b1 mask2)) 6 (mask b2 mask2)
+            in
+            Ok (code, b3n)
+        | Cons (b2, b3n) -> (
+          match b3n () with
+          | Nil -> Error ([b0; b1; b2], b3n)
+          | Cons (b3, b4n) when is_11110xxx b0 ->
+              let code =
+                cat
+                  (cat
+                     (cat (mask b0 mask5) 6 (mask b1 mask2))
+                     6 (mask b2 mask2))
+                  6 (mask b3 mask2) in
+              Ok (code, b4n)
+          | Cons (b3, b4n) -> Error ([b0; b1; b2; b3], b4n) ) ) )
+end
+
+let rec seq_of_chan inch : int Seq.t =
+ fun () ->
+  try
+    let b0 = input_byte inch in
+    Seq.Cons (b0, seq_of_chan inch)
+  with End_of_file -> Nil
+
 module type MAST = sig
   type span
 
@@ -147,11 +200,21 @@ let boolObj b : monte =
     method unwrap = Some (MBool b)
   end
 
-let charObj c : monte =
+let charObj (c : int) : monte =
   object
     method call verb args namedArgs = match (verb, args) with _ -> None
 
-    method stringOf = Char.escaped (char_of_int c)
+    method stringOf =
+      let body =
+        match c with
+        | _ when c > 0xffff -> Printf.sprintf "\\U%08x" c
+        | _ when c > 0x7f -> Printf.sprintf "\\u%04x" c
+        | _ when c < 0x20 -> Printf.sprintf "\\u%04x" c
+        | _ when c = Char.code '\\' -> "\"\\\""
+        | _ when c = Char.code '\"' -> "\"\"\""
+        | _ -> Char.escaped (char_of_int c) in
+      (* XXX quotes? *)
+      "'" ^ body ^ "'"
 
     method unwrap = Some (MChar c)
   end
@@ -758,6 +821,10 @@ module MASTContext (Monte : MAST) = struct
               | tag ->
                   let e =
                     match tag with
+                    | 'C' -> (
+                      match UTF8D.decode1 (seq_of_chan ic) with
+                      | Ok (code, _) -> Monte.charExpr code
+                      | Error (bs, _) -> throw_invalid_mast ic "bad utf8" )
                     | 'I' ->
                         let i = input_varint ic in
                         let shifted = Z.shift_right i 1 in
