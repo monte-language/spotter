@@ -464,37 +464,35 @@ module Compiler = struct
         (fun d (v, ps, nps, body) ->
           AtomDict.add (v, List.length ps) (ps, nps, body) d)
         AtomDict.empty meths in
-    State.bind asExpr (fun ase ->
-        State.bind (sequence auditors) (fun auds (* XXX rebind into env *) s ->
-            ( object (self)
-                (* XXX method dispatch, matcher dispatch *)
-                method call verb args namedArgs : monte option =
-                  Printf.printf "call: %s/%d" verb (List.length args) ;
-                  match
-                    AtomDict.find_opt (verb, List.length args) methdict
-                  with
-                  | None ->
-                      Printf.printf "no such method" ;
-                      None (* refused. XXX matchers *)
-                  | Some (params, nParams, body) ->
-                      let exit = nullObj (* XXX *) in
-                      (* XXX bind namePatt to self *)
-                      (* XXX duplicate code with listPatt, refactor! *)
-                      let env' =
-                        List.fold_left2
-                          (fun ma p s -> State.and_then ma (p s exit))
-                          (State.return ()) params args in
-                      Printf.printf "executing %s" verb ;
-                      let o, _ = State.and_then env' body s in
-                      Some o
+    (* XXX State.bind asExpr (fun ase -> *)
+    State.bind (sequence auditors) (fun auds (* XXX rebind into env *) s ->
+        ( object (self)
+            (* XXX method dispatch, matcher dispatch *)
+            method call verb args namedArgs : monte option =
+              Printf.printf "call: %s/%d" verb (List.length args) ;
+              match AtomDict.find_opt (verb, List.length args) methdict with
+              | None ->
+                  Printf.printf "no such method" ;
+                  None (* refused. XXX matchers *)
+              | Some (params, nParams, body) ->
+                  let exit = nullObj (* XXX *) in
+                  (* XXX bind namePatt to self *)
+                  (* XXX duplicate code with listPatt, refactor! *)
+                  let env' =
+                    List.fold_left2
+                      (fun ma p s -> State.and_then ma (p s exit))
+                      (State.return ()) params args in
+                  Printf.printf "executing %s" verb ;
+                  let o, _ = State.and_then env' body s in
+                  Some o
 
-                (* XXX miranda methods *)
-                (* XXX call printOn *)
-                method stringOf = "<user>"
+            (* XXX miranda methods *)
+            (* XXX call printOn *)
+            method stringOf = "<user>"
 
-                method unwrap = None
-              end
-            , s )))
+            method unwrap = None
+          end
+        , s ))
 
   let assignExpr name rhs span =
     State.bind rhs (fun rv ->
