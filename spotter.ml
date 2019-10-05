@@ -283,7 +283,7 @@ let string_of_mexn m =
       "An ejector has come forward with a complaint of being thrown...twice!"
   | WrongType -> "Wrong type while unwrapping data object"
   | UserException (msg, span) ->
-      "User-created exception at span " ^ (string_of_span span) ^ ": " ^ msg
+      "User-created exception at span " ^ string_of_span span ^ ": " ^ msg
 
 exception MonteException of mexn
 
@@ -349,6 +349,11 @@ let ejectTo span =
     end in
   (to_monte ej, fun () -> ej#disable)
 
+let unwrapBool specimen =
+  match specimen#unwrap with
+  | Some (MBool b) -> b
+  | _ -> raise (MonteException WrongType)
+
 let unwrapList specimen =
   match specimen#unwrap with
   | Some (MList l) -> l
@@ -410,12 +415,7 @@ module Compiler = struct
     State.bind target (fun t ->
         State.bind (sequence args) (fun a ->
             State.bind (sequence namedArgs) (fun na ->
-                match t#call verb a na with
-                | Some o -> State.return o
-                | None ->
-                    raise
-                      (MonteException
-                         (UserException ("no such verb:" ^ verb, span))))))
+                State.return (call_exn verb a na))))
 
   let defExpr patt exitOpt expr span =
     State.bind expr (fun e ->
@@ -509,9 +509,9 @@ module Compiler = struct
   let ifExpr test cons alt span =
     let alt' = Option.value alt ~default:(nullExpr span) in
     State.bind test (fun t ->
-        match t#unwrap with
-        | Some (MBool b) -> if b then cons else alt'
-        | _ ->
+        match unwrapBool t with
+        | Some b -> if b then cons else alt'
+        | None ->
             raise
               (MonteException
                  (UserException ("expected bool: " ^ t#stringOf, span))))
