@@ -95,7 +95,14 @@ module type MAST = sig
   val metaContextExpr : span -> t
 
   val metho :
-    string -> string -> patt list -> nparam list -> t -> t -> span -> meth
+       string
+    -> string
+    -> patt list
+    -> nparam list
+    -> t option
+    -> t
+    -> span
+    -> meth
 
   val matche : patt -> t -> span -> matcher
   val namedArg : t -> t -> span -> narg
@@ -703,18 +710,22 @@ module MASTContext (Monte : MAST) = struct
               | x -> throw_invalid_mast ic "patt" )
         | 'M' ->
             let eat_nparam ic =
-              let ek = self#eat_expr ic
-              and pv = self#eat_patt ic
-              and ed = self#eat_expr_opt ic in
-              Monte.namedParam ek pv ed (self#eat_span ic) in
-            let doc = input_str ic
-            and verb = input_str ic
-            and ps = input_many self#eat_patt ic
-            and nps = input_many eat_nparam ic
-            and g = self#eat_expr ic
-            and b = self#eat_expr ic in
+              let ek = self#eat_expr ic in
+              let pv = self#eat_patt ic in
+              let ed = self#eat_expr_opt ic in
+              Monte.namedParam ek pv ed in
+            let doc = input_str ic in
+            let verb = input_str ic in
+            let ps = input_many self#eat_patt ic in
+            let nps = input_many eat_nparam ic in
+            let g = self#eat_expr_opt ic in
+            let b = self#eat_expr ic in
+            let span = self#eat_span ic in
             exprs#push
-              (HMeth (Monte.metho doc verb ps nps g b (self#eat_span ic)))
+              (HMeth
+                 (Monte.metho doc verb ps
+                    (List.map (fun np -> np span) nps)
+                    g b span))
         | 'R' ->
             let p = self#eat_patt ic and e = self#eat_expr ic in
             exprs#push (HMatch (Monte.matche p e (self#eat_span ic)))
@@ -769,12 +780,12 @@ module MASTContext (Monte : MAST) = struct
                   Monte.escapeCatchExpr p e pc ec
               | 'O' ->
                   (* Object with no script, just direct methods and matchers. *)
-                  let doc = input_str ic
-                  and patt = self#eat_patt ic
-                  and asExpr = self#eat_expr ic
-                  and implements = input_many self#eat_expr ic
-                  and methods = input_many self#eat_method ic
-                  and matchers = input_many self#eat_matcher ic in
+                  let doc = input_str ic in
+                  let patt = self#eat_patt ic in
+                  let asExpr = self#eat_expr ic in
+                  let implements = input_many self#eat_expr ic in
+                  let methods = input_many self#eat_method ic in
+                  let matchers = input_many self#eat_matcher ic in
                   Monte.objectExpr doc patt asExpr implements methods matchers
               | 'A' ->
                   let target = input_str ic in

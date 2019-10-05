@@ -12,8 +12,8 @@ let
     buildInputs = with ocamlPackages;
       [ ocaml ocamlbuild findlib camomile zarith ];
     buildPhase = ''
-      ocamlfind ocamldep -package zarith -package camomile -modules spotter.ml
       ocamlbuild -use-ocamlfind -pkgs camomile,zarith \
+        -tag debug \
         spotter.byte spotter.native
     '';
     installPhase = ''
