@@ -643,6 +643,30 @@ let unwrapList specimen =
   | Some (MList l) -> l
   | _ -> raise (MonteException (WrongType (MList [], specimen)))
 
+let _loop : monte =
+  object
+    method call verb (args : monte list) nargs =
+      let run iterable consumer : monte =
+        let iterator = call_exn iterable "_makeIterator" [] [] in
+        let no_span : mspan = Blob (Z.zero, Z.zero, Z.zero, Z.zero) in
+        let ej, _ = ejectTo no_span in
+        let rec next () =
+          try
+            let values = call_exn iterator "next" [ej] [] in
+            ignore (call_exn consumer "run" (unwrapList values) []) ;
+            next ()
+          with MonteException (Ejecting (e, _)) as ex ->
+            if e == ej then nullObj else raise ex in
+        next () in
+      match (verb, args) with
+      | "run", [iterable; consumer] -> Some (run iterable consumer)
+      | _ -> None
+
+    method stringOf = "_loop"
+
+    method unwrap = None
+  end
+
 let safeScope =
   Dict.of_seq
     (List.to_seq
