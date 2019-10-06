@@ -1,9 +1,5 @@
 open CamomileLibraryDefault.Camomile
 
-let logged label ch =
-  Printf.printf "%s%c..." label ch ;
-  ch
-
 type monte =
   < call: string -> monte list -> (monte * monte) list -> monte option
   ; stringOf: string
@@ -57,6 +53,59 @@ end = struct
   let set s _ = ((), s)
   let modify f s = ((), f s)
 end
+
+module UTF8D = struct
+  (** `decode bs` gives either Ok (code, rest) or Error (consumed_bytes, rest) *)
+  let decode1 (bs : int Seq.t) : (int * int Seq.t, int list * int Seq.t) result
+      =
+    let open Int in
+    let mask2 = 0b11000000
+    and mask3 = 0b11100000
+    and mask4 = 0b11110000
+    and mask5 = 0b11111000
+    and mask b m = logand b (lognot m) in
+    let is_0xxxxxxx b = shift_right b 7 = 0b0
+    and is_110xxxxx b = shift_right b 5 = 0b110
+    and is_1110xxxx b = shift_right b 4 = 0b1110
+    and is_11110xxx b = shift_right b 3 = 0b11110
+    and cat hi n lo = logor (shift_left hi n) lo in
+    match bs () with
+    | Nil -> Error ([], bs)
+    | Cons (b0, b1n) when is_0xxxxxxx b0 -> Ok (b0, b1n)
+    | Cons (b0, b1n) -> (
+      match b1n () with
+      | Nil -> Error ([b0], b1n)
+      | Cons (b1, b2n) when is_110xxxxx b0 ->
+          let code = cat (mask b0 mask3) 6 (mask b1 mask2) in
+          Ok (code, b2n)
+      | Cons (b1, b2n) -> (
+        match b2n () with
+        | Nil -> Error ([b0; b1], b2n)
+        | Cons (b2, b3n) when is_1110xxxx b0 ->
+            let code =
+              cat (cat (mask b0 mask4) 6 (mask b1 mask2)) 6 (mask b2 mask2)
+            in
+            Ok (code, b3n)
+        | Cons (b2, b3n) -> (
+          match b3n () with
+          | Nil -> Error ([b0; b1; b2], b3n)
+          | Cons (b3, b4n) when is_11110xxx b0 ->
+              let code =
+                cat
+                  (cat
+                     (cat (mask b0 mask5) 6 (mask b1 mask2))
+                     6 (mask b2 mask2))
+                  6 (mask b3 mask2) in
+              Ok (code, b4n)
+          | Cons (b3, b4n) -> Error ([b0; b1; b2; b3], b4n) ) ) )
+end
+
+let rec seq_of_chan inch : int Seq.t =
+ fun () ->
+  try
+    let b0 = input_byte inch in
+    Seq.Cons (b0, seq_of_chan inch)
+  with End_of_file -> Nil
 
 module type MAST = sig
   type span
@@ -151,11 +200,21 @@ let boolObj b : monte =
     method unwrap = Some (MBool b)
   end
 
-let charObj c : monte =
+let charObj (c : int) : monte =
   object
     method call verb args namedArgs = match (verb, args) with _ -> None
 
-    method stringOf = Char.escaped (char_of_int c)
+    method stringOf =
+      let body =
+        match c with
+        | _ when c > 0xffff -> Printf.sprintf "\\U%08x" c
+        | _ when c > 0x7f -> Printf.sprintf "\\u%04x" c
+        | _ when c < 0x20 -> Printf.sprintf "\\u%04x" c
+        | _ when c = Char.code '\\' -> "\"\\\""
+        | _ when c = Char.code '\"' -> "\"\"\""
+        | _ -> Char.escaped (char_of_int c) in
+      (* XXX quotes? *)
+      "'" ^ body ^ "'"
 
     method unwrap = Some (MChar c)
   end
@@ -263,14 +322,6 @@ let varSlotObj value : monte =
     method unwrap = None
   end
 
-let safeScope =
-  Dict.of_seq
-    (List.to_seq
-       (List.map
-          (fun (k, v) -> (k, bindingObj (finalSlotObj v)))
-          [ ("null", nullObj); ("true", boolObj true); ("false", boolObj false)
-          ; ("_makeList", _makeList) ]))
-
 type mspan =
   | OneToOne of (Z.t * Z.t * Z.t * Z.t)
   | Blob of (Z.t * Z.t * Z.t * Z.t)
@@ -281,17 +332,19 @@ let string_of_span span =
   match span with OneToOne t -> "str:" ^ sos t | Blob t -> "blob:" ^ sos t
 
 type mexn =
-  | Refused of (string * monte list * monte list)
+  | Refused of (monte * string * monte list * monte list)
   | Ejecting of (monte * monte)
   | DoubleThrown
   | WrongType of (monteprim * monte)
   | NameError of (string * mspan)
-  | UserException of (monte * mspan)
+  | MissingNamedArg of (monte * mspan)
+  | UserException of monte
 
 let string_of_mexn m =
   match m with
-  | Refused (verb, args, namedArgs) ->
-      "Message refused: ." ^ verb ^ "/" ^ string_of_int (List.length args)
+  | Refused (target, verb, args, namedArgs) ->
+      "Message refused: " ^ target#stringOf ^ "." ^ verb ^ "/"
+      ^ string_of_int (List.length args)
   | Ejecting (payload, ej) ->
       "Ejector: " ^ ej#stringOf ^ "(" ^ payload#stringOf ^ ")"
   | DoubleThrown ->
@@ -309,11 +362,37 @@ let string_of_mexn m =
       "Wrong type while unwrapping " ^ prim_type ^ ": " ^ actual#stringOf
   | NameError (name, span) ->
       "name error at " ^ string_of_span span ^ ": " ^ name
-  | UserException (value, span) ->
-      "User-created exception at span " ^ string_of_span span ^ ": "
-      ^ value#stringOf
+  | MissingNamedArg (k, span) ->
+      "Named arg " ^ k#stringOf ^ " missing in call at span "
+      ^ string_of_span span
+  | UserException value -> "User-created exception : " ^ value#stringOf
 
 exception MonteException of mexn
+
+let loaderObj =
+  object
+    method call verb args namedArgs =
+      match (verb, args) with
+      | "import", [_] ->
+          raise (MonteException (UserException (strObj "XXX loader not impl")))
+      | _ -> None
+
+    method stringOf = "<import>"
+
+    method unwrap = None
+  end
+
+let throwObj : monte =
+  object
+    method call verb args nargs =
+      match (verb, args) with
+      | "run", [value] -> raise (MonteException (UserException value))
+      | _ -> None
+
+    method stringOf = "throw"
+
+    method unwrap = None
+  end
 
 (* The main calling interface. Handles Miranda methods. Propagates exceptions
  * on failure. *)
@@ -326,7 +405,34 @@ let call_exn target verb args namedArgs : monte =
     | "_sealedDispatch", [_] -> nullObj
     | "_uncall", [] -> nullObj
     | _ ->
-        raise (MonteException (Refused (verb, args, List.map fst namedArgs))) )
+        raise
+          (MonteException
+             (Refused (target, verb, args, List.map fst namedArgs))) )
+
+let todoGuardObj name : monte =
+  object
+    method call verb args nargs =
+      match (verb, args) with
+      | "coerce", [specimen; exit] ->
+          Printf.printf "\nXXX %s.coerce(...) not implemented\n" name ;
+          Some specimen
+      | _ -> None
+
+    method stringOf = "DeepFrozenStamp"
+
+    method unwrap = None
+  end
+
+let safeScope =
+  Dict.of_seq
+    (List.to_seq
+       (List.map
+          (fun (k, v) -> (k, bindingObj (finalSlotObj v)))
+          [ ("null", nullObj); ("true", boolObj true); ("false", boolObj false)
+          ; ("_makeList", _makeList); ("throw", throwObj)
+          ; ("DeepFrozen", todoGuardObj "DeepFrozen")
+          ; ("DeepFrozenStamp", todoGuardObj "DeepFrozenStamp")
+          ; ("Str", todoGuardObj "Str") ]))
 
 let calling verb args namedArgs target = call_exn target verb args namedArgs
 let get = calling "get" [] []
@@ -443,14 +549,13 @@ module Compiler = struct
                 State.return (call_exn t verb a na))))
 
   let defExpr patt exitOpt expr span =
-    match exitOpt with
-    | Some exit ->
+    let withOptionalExpr exprOpt d f =
+      match exprOpt with
+      | Some expr -> State.bind expr (fun mv -> f mv)
+      | None -> f d in
+    withOptionalExpr exitOpt throwObj (fun exit ->
         State.bind expr (fun e ->
-            State.bind exit (fun x ->
-                State.and_then (patt e x) (State.return e)))
-    | None ->
-        State.bind expr (fun e ->
-            State.and_then (patt e nullObj) (State.return e))
+            State.and_then (patt e exit) (State.return e)))
 
   let escapeExpr patt body span =
     lazyState (fun () ->
@@ -476,7 +581,8 @@ module Compiler = struct
             with MonteException (Ejecting (o, thrower)) when thrower == ej ->
               State.and_then (cpatt o nullObj) cbody))
 
-  let objectExpr doc namePatt asOpt auditors meths matchs span =
+  let objectExpr doc (namePatt : patt) (asOpt : t option) (auditors : t list)
+      (meths : meth list) (matchs : matcher list) (span : mspan) : t =
     let methdict =
       List.fold_left
         (fun d (v, ps, nps, body) ->
@@ -486,10 +592,11 @@ module Compiler = struct
       (Option.value asOpt ~default:(State.return nullObj))
       (fun ase ->
         State.bind (sequence auditors) (fun auds (* XXX rebind into env *) s ->
-            ( object (self)
+            let userObj =
+              object (self)
                 (* XXX method dispatch, matcher dispatch *)
                 method call verb args namedArgs : monte option =
-                  Printf.printf "call: %s/%d" verb (List.length args) ;
+                  Printf.printf "(call: %s/%d)" verb (List.length args) ;
                   match
                     AtomDict.find_opt (verb, List.length args) methdict
                   with
@@ -497,14 +604,16 @@ module Compiler = struct
                       Printf.printf "no such method" ;
                       None (* refused. XXX matchers *)
                   | Some (params, nParams, body) ->
-                      let exit = nullObj (* XXX *) in
+                      let exit = throwObj in
                       (* XXX bind namePatt to self *)
                       (* XXX duplicate code with listPatt, refactor! *)
                       let env' =
                         List.fold_left2
                           (fun ma p s -> State.and_then ma (p s exit))
                           (State.return ()) params args in
-                      Printf.printf "executing %s" verb ;
+                      Printf.printf "(executing %s(" verb ;
+                      List.iter (fun a -> Printf.printf "%s, " a#stringOf) args ;
+                      Printf.printf ") at %s)" (string_of_span span) ;
                       let o, _ = State.and_then env' body s in
                       Some o
 
@@ -513,8 +622,9 @@ module Compiler = struct
                 method stringOf = "<user>"
 
                 method unwrap = None
-              end
-            , s )))
+              end in
+            let _, s' = (namePatt userObj throwObj) s in
+            (userObj, s')))
 
   let assignExpr name rhs span =
     State.bind rhs (fun rv ->
@@ -568,15 +678,13 @@ module Compiler = struct
   let namedArg key value span =
     State.bind key (fun k -> State.bind value (fun v -> State.return (k, v)))
 
-  let namedParam key patt default span map =
+  let namedParam key patt defaultOpt span map =
     State.bind key (fun k ->
         (* XXX uses OCaml equality!! *)
-        match List.assoc_opt k map with
-        | Some value -> patt value nullObj
-        | None ->
-            State.bind
-              (Option.value default ~default:(nullExpr span))
-              (const (State.return ())))
+        match (List.assoc_opt k map, defaultOpt) with
+        | Some value, _ -> patt value throwObj
+        | None, Some default -> State.bind default (const (State.return ()))
+        | None, None -> raise (MonteException (MissingNamedArg (k, span))))
 
   let coerceOpt guardOpt specimen exit =
     match guardOpt with
@@ -591,6 +699,7 @@ module Compiler = struct
 
   let finalPatt noun guard span specimen exit =
     State.bind (coerceOpt guard specimen exit) (fun s ->
+        Printf.printf "(finalPatt: %s := %s)" noun s#stringOf ;
         (* XXX guards *)
         State.modify (Dict.add noun (bindingObj (finalSlotObj s))))
 
@@ -655,14 +764,9 @@ module MASTContext (Monte : MAST) = struct
     | HMeth of Monte.meth
     | HMatch of Monte.matcher
 
-  let v4 ic =
-    let i1 = input_varint ic in
-    let i2 = input_varint ic in
-    let i3 = input_varint ic in
-    let i4 = input_varint ic in
-    Printf.printf "i4:%s,%s,%s,%s\n" (Z.to_string i1) (Z.to_string i2)
-      (Z.to_string i3) (Z.to_string i4) ;
-    (i1, i2, i3, i4)
+  let logged label ch =
+    (* XXX Printf.printf "%s%c..." label ch; *)
+    ch
 
   let make () =
     object (self)
@@ -673,6 +777,12 @@ module MASTContext (Monte : MAST) = struct
       val patts = backlist ()
 
       method private eat_span ic =
+        let v4 ic =
+          let i1 = input_varint ic in
+          let i2 = input_varint ic in
+          let i3 = input_varint ic in
+          let i4 = input_varint ic in
+          (i1, i2, i3, i4) in
         match input_char ic with
         | 'S' -> Monte.oneToOne (v4 ic)
         | 'B' -> Monte.blob (v4 ic)
@@ -758,6 +868,10 @@ module MASTContext (Monte : MAST) = struct
               | tag ->
                   let e =
                     match tag with
+                    | 'C' -> (
+                      match UTF8D.decode1 (seq_of_chan ic) with
+                      | Ok (code, _) -> Monte.charExpr code
+                      | Error (bs, _) -> throw_invalid_mast ic "bad utf8" )
                     | 'I' ->
                         let i = input_varint ic in
                         let shifted = Z.shift_right i 1 in
@@ -847,7 +961,7 @@ end
 
 module M = MASTContext (Compiler)
 
-let read_mast filename =
+let read_mast filename : Compiler.t =
   let ic = open_in_mast filename in
   let context = M.make () in
   let rv = context#eat_last_expr ic in
@@ -855,11 +969,15 @@ let read_mast filename =
 
 let () =
   for i = 1 to Array.length Sys.argv - 1 do
-    Printf.printf "[%i] %s\n" i Sys.argv.(i) ;
     let filename = Sys.argv.(i) in
+    Printf.printf "[%i] %s: read mast\n" i filename ;
     let expr = read_mast filename in
     try
-      let result, _ = expr safeScope in
-      Printf.printf "==> %s\n" result#stringOf
-    with MonteException m -> Printf.printf "%s\n" (string_of_mexn m)
+      Printf.printf "[%i] %s: evaluate module\n" i filename ;
+      let mmod, _ = expr safeScope in
+      Printf.printf "=mod=> %s\n" mmod#stringOf ;
+      Printf.printf "[%i] %s: run module\n" i filename ;
+      let result = call_exn mmod "run" [loaderObj] [] in
+      Printf.printf "=out=> %s\n" result#stringOf
+    with MonteException m -> Printf.printf "\n%s\n" (string_of_mexn m)
   done
