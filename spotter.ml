@@ -340,17 +340,19 @@ let string_of_span span =
   match span with OneToOne t -> "str:" ^ sos t | Blob t -> "blob:" ^ sos t
 
 type mexn =
-  | Refused of (string * monte list * monte list)
+  | Refused of (monte * string * monte list * monte list)
   | Ejecting of (monte * monte)
   | DoubleThrown
   | WrongType of (monteprim * monte)
   | NameError of (string * mspan)
-  | UserException of (monte * mspan)
+  | MissingNamedArg of (monte * mspan)
+  | UserException of monte
 
 let string_of_mexn m =
   match m with
-  | Refused (verb, args, namedArgs) ->
-      "Message refused: ." ^ verb ^ "/" ^ string_of_int (List.length args)
+  | Refused (target, verb, args, namedArgs) ->
+      "Message refused: " ^ target#stringOf ^ "." ^ verb ^ "/"
+      ^ string_of_int (List.length args)
   | Ejecting (payload, ej) ->
       "Ejector: " ^ ej#stringOf ^ "(" ^ payload#stringOf ^ ")"
   | DoubleThrown ->
@@ -368,9 +370,10 @@ let string_of_mexn m =
       "Wrong type while unwrapping " ^ prim_type ^ ": " ^ actual#stringOf
   | NameError (name, span) ->
       "name error at " ^ string_of_span span ^ ": " ^ name
-  | UserException (value, span) ->
-      "User-created exception at span " ^ string_of_span span ^ ": "
-      ^ value#stringOf
+  | MissingNamedArg (k, span) ->
+      "Named arg " ^ k#stringOf ^ " missing in call at span "
+      ^ string_of_span span
+  | UserException value -> "User-created exception : " ^ value#stringOf
 
 exception MonteException of mexn
 
@@ -385,7 +388,9 @@ let call_exn target verb args namedArgs : monte =
     | "_sealedDispatch", [_] -> nullObj
     | "_uncall", [] -> nullObj
     | _ ->
-        raise (MonteException (Refused (verb, args, List.map fst namedArgs))) )
+        raise
+          (MonteException
+             (Refused (target, verb, args, List.map fst namedArgs))) )
 
 let calling verb args namedArgs target = call_exn target verb args namedArgs
 let get = calling "get" [] []
