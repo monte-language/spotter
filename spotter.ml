@@ -961,7 +961,7 @@ end
 
 module M = MASTContext (Compiler)
 
-let read_mast filename =
+let read_mast filename : Compiler.t =
   let ic = open_in_mast filename in
   let context = M.make () in
   let rv = context#eat_last_expr ic in
@@ -969,11 +969,15 @@ let read_mast filename =
 
 let () =
   for i = 1 to Array.length Sys.argv - 1 do
-    Printf.printf "[%i] %s\n" i Sys.argv.(i) ;
     let filename = Sys.argv.(i) in
+    Printf.printf "[%i] %s: read mast\n" i filename ;
     let expr = read_mast filename in
     try
-      let result, _ = expr safeScope in
-      Printf.printf "==> %s\n" result#stringOf
-    with MonteException m -> Printf.printf "%s\n" (string_of_mexn m)
+      Printf.printf "[%i] %s: evaluate module\n" i filename ;
+      let mmod, _ = expr safeScope in
+      Printf.printf "=mod=> %s\n" mmod#stringOf ;
+      Printf.printf "[%i] %s: run module\n" i filename ;
+      let result = call_exn mmod "run" [loaderObj] [] in
+      Printf.printf "=out=> %s\n" result#stringOf
+    with MonteException m -> Printf.printf "\n%s\n" (string_of_mexn m)
   done
