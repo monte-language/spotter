@@ -277,10 +277,23 @@ let rec strObj s : monte =
     method unwrap = Some (MStr s)
   end
 
+let flexListObj (init : monte list) : monte =
+  object
+    val mutable items = init
+
+    method call verb args nargs = None
+
+    (* XXX *)
+    method stringOf = "<FlexList>"
+
+    method unwrap = None
+  end
+
 let rec listObj l : monte =
   object
     method call verb args namedArgs =
       match (verb, args) with
+      | "diverge", [] -> Some (flexListObj l)
       | "size", [] -> Some (intObj (Z.of_int (List.length l)))
       | _ -> None
 
@@ -466,6 +479,18 @@ let todoGuardObj name : monte =
     method unwrap = None
   end
 
+let flexMapObj (init : (monte * monte) list) : monte =
+  object
+    val mutable pairs = init
+
+    method call verb args nargs = None
+
+    (* XXX *)
+    method stringOf = "<FlexMap>"
+
+    method unwrap = None
+  end
+
 let mapObj (pairs : (monte * monte) list) : monte =
   (* XXX make sure ej doesn't return. *)
   let throwStr ej msg = call_exn ej "run" [strObj msg] [] in
@@ -492,6 +517,7 @@ let mapObj (pairs : (monte * monte) list) : monte =
   object
     method call (verb : string) (args : monte list) namedArgs : monte option =
       match (verb, args) with
+      | "diverge", [] -> Some (flexMapObj pairs)
       | "_makeIterator", [] -> Some (_makeIterator ())
       | _ ->
           Printf.printf "\nXXX Map verb todo? %s\n" verb ;
