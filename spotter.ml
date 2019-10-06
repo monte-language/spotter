@@ -372,18 +372,6 @@ let loaderObj =
     method unwrap = None
   end
 
-let throwObj : monte =
-  object
-    method call verb args nargs =
-      match (verb, args) with
-      | "run", [value] -> raise (MonteException (UserException value))
-      | _ -> None
-
-    method stringOf = "throw"
-
-    method unwrap = None
-  end
-
 (* The main calling interface. Handles Miranda methods. Propagates exceptions
  * on failure. *)
 let call_exn target verb args namedArgs : monte =
@@ -398,6 +386,21 @@ let call_exn target verb args namedArgs : monte =
         raise
           (MonteException
              (Refused (target, verb, args, List.map fst namedArgs))) )
+
+let throwObj : monte =
+  object
+    method call verb args nargs =
+      match (verb, args) with
+      | "run", [value] -> raise (MonteException (UserException value))
+      | "eject", [ej; value] ->
+          let _ = call_exn ej "run" [value] [] in
+          raise (MonteException (UserException value))
+      | _ -> None
+
+    method stringOf = "throw"
+
+    method unwrap = None
+  end
 
 let dataGuardObj example : monte =
   let name = prim_name example in
