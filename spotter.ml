@@ -322,14 +322,6 @@ let varSlotObj value : monte =
     method unwrap = None
   end
 
-let safeScope =
-  Dict.of_seq
-    (List.to_seq
-       (List.map
-          (fun (k, v) -> (k, bindingObj (finalSlotObj v)))
-          [ ("null", nullObj); ("true", boolObj true); ("false", boolObj false)
-          ; ("_makeList", _makeList) ]))
-
 type mspan =
   | OneToOne of (Z.t * Z.t * Z.t * Z.t)
   | Blob of (Z.t * Z.t * Z.t * Z.t)
@@ -377,6 +369,31 @@ let string_of_mexn m =
 
 exception MonteException of mexn
 
+let loaderObj =
+  object
+    method call verb args namedArgs =
+      match (verb, args) with
+      | "import", [_] ->
+          raise (MonteException (UserException (strObj "XXX loader not impl")))
+      | _ -> None
+
+    method stringOf = "<import>"
+
+    method unwrap = None
+  end
+
+let throwObj : monte =
+  object
+    method call verb args nargs =
+      match (verb, args) with
+      | "run", [value] -> raise (MonteException (UserException value))
+      | _ -> None
+
+    method stringOf = "throw"
+
+    method unwrap = None
+  end
+
 (* The main calling interface. Handles Miranda methods. Propagates exceptions
  * on failure. *)
 let call_exn target verb args namedArgs : monte =
@@ -391,6 +408,31 @@ let call_exn target verb args namedArgs : monte =
         raise
           (MonteException
              (Refused (target, verb, args, List.map fst namedArgs))) )
+
+let todoGuardObj name : monte =
+  object
+    method call verb args nargs =
+      match (verb, args) with
+      | "coerce", [specimen; exit] ->
+          Printf.printf "\nXXX %s.coerce(...) not implemented\n" name ;
+          Some specimen
+      | _ -> None
+
+    method stringOf = "DeepFrozenStamp"
+
+    method unwrap = None
+  end
+
+let safeScope =
+  Dict.of_seq
+    (List.to_seq
+       (List.map
+          (fun (k, v) -> (k, bindingObj (finalSlotObj v)))
+          [ ("null", nullObj); ("true", boolObj true); ("false", boolObj false)
+          ; ("_makeList", _makeList); ("throw", throwObj)
+          ; ("DeepFrozen", todoGuardObj "DeepFrozen")
+          ; ("DeepFrozenStamp", todoGuardObj "DeepFrozenStamp")
+          ; ("Str", todoGuardObj "Str") ]))
 
 let calling verb args namedArgs target = call_exn target verb args namedArgs
 let get = calling "get" [] []
@@ -507,14 +549,13 @@ module Compiler = struct
                 State.return (call_exn t verb a na))))
 
   let defExpr patt exitOpt expr span =
-    match exitOpt with
-    | Some exit ->
+    let withOptionalExpr exprOpt d f =
+      match exprOpt with
+      | Some expr -> State.bind expr (fun mv -> f mv)
+      | None -> f d in
+    withOptionalExpr exitOpt throwObj (fun exit ->
         State.bind expr (fun e ->
-            State.bind exit (fun x ->
-                State.and_then (patt e x) (State.return e)))
-    | None ->
-        State.bind expr (fun e ->
-            State.and_then (patt e nullObj) (State.return e))
+            State.and_then (patt e exit) (State.return e)))
 
   let escapeExpr patt body span =
     lazyState (fun () ->
@@ -540,7 +581,8 @@ module Compiler = struct
             with MonteException (Ejecting (o, thrower)) when thrower == ej ->
               State.and_then (cpatt o nullObj) cbody))
 
-  let objectExpr doc namePatt asOpt auditors meths matchs span =
+  let objectExpr doc (namePatt : patt) (asOpt : t option) (auditors : t list)
+      (meths : meth list) (matchs : matcher list) (span : mspan) : t =
     let methdict =
       List.fold_left
         (fun d (v, ps, nps, body) ->
@@ -550,7 +592,8 @@ module Compiler = struct
       (Option.value asOpt ~default:(State.return nullObj))
       (fun ase ->
         State.bind (sequence auditors) (fun auds (* XXX rebind into env *) s ->
-            ( object (self)
+            let userObj =
+              object (self)
                 (* XXX method dispatch, matcher dispatch *)
                 method call verb args namedArgs : monte option =
                   Printf.printf "(call: %s/%d)" verb (List.length args) ;
@@ -561,7 +604,7 @@ module Compiler = struct
                       Printf.printf "no such method" ;
                       None (* refused. XXX matchers *)
                   | Some (params, nParams, body) ->
-                      let exit = nullObj (* XXX *) in
+                      let exit = throwObj in
                       (* XXX bind namePatt to self *)
                       (* XXX duplicate code with listPatt, refactor! *)
                       let env' =
@@ -579,8 +622,9 @@ module Compiler = struct
                 method stringOf = "<user>"
 
                 method unwrap = None
-              end
-            , s )))
+              end in
+            let _, s' = (namePatt userObj throwObj) s in
+            (userObj, s')))
 
   let assignExpr name rhs span =
     State.bind rhs (fun rv ->
@@ -634,15 +678,13 @@ module Compiler = struct
   let namedArg key value span =
     State.bind key (fun k -> State.bind value (fun v -> State.return (k, v)))
 
-  let namedParam key patt default span map =
+  let namedParam key patt defaultOpt span map =
     State.bind key (fun k ->
         (* XXX uses OCaml equality!! *)
-        match List.assoc_opt k map with
-        | Some value -> patt value nullObj
-        | None ->
-            State.bind
-              (Option.value default ~default:(nullExpr span))
-              (const (State.return ())))
+        match (List.assoc_opt k map, defaultOpt) with
+        | Some value, _ -> patt value throwObj
+        | None, Some default -> State.bind default (const (State.return ()))
+        | None, None -> raise (MonteException (MissingNamedArg (k, span))))
 
   let coerceOpt guardOpt specimen exit =
     match guardOpt with
