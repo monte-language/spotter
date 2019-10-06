@@ -584,45 +584,6 @@ let traceObj suffix : monte =
     method unwrap = None
   end
 
-let safeScope =
-  Dict.of_seq
-    (List.to_seq
-       (List.map
-          (fun (k, v) -> (k, bindingObj (finalSlotObj v)))
-          [ ("Bool", dataGuardObj (MBool true)); ("Bytes", todoGuardObj "Bytes")
-          ; ("Char", dataGuardObj (MChar 32))
-          ; ("DeepFrozen", todoGuardObj "DeepFrozen")
-          ; ("DeepFrozenStamp", todoGuardObj "DeepFrozenStamp")
-          ; ("Double", dataGuardObj (MDouble 1.0))
-          ; ("Infinity", doubleObj infinity); ("NaN", doubleObj nan)
-          ; ("Int", dataGuardObj (MInt Z.zero)); ("Near", todoGuardObj "Near")
-          ; ("Same", todoGuardObj "Same"); ("Ref", todoObj "Ref")
-          ; ("astEval", todoObj "astEval")
-          ; ("Selfless", todoGuardObj "Selfless"); ("Str", todoGuardObj "Str")
-          ; ("SubrangeGuard", todoGuardObj "SubrangeGuard")
-          ; ("Void", voidGuardObj); ("_auditedBy", todoObj "_auditedBy")
-          ; ("_equalizer", todoObj "_equalizer"); ("_loop", todoObj "_loop")
-          ; ("_makeBytes", todoObj "_makeBytes")
-          ; ("_makeDouble", todoObj "_makeDouble")
-          ; ("_makeFinalSlot", todoObj "_makeFinalSlot")
-          ; ("_makeInt", todoObj "_makeInt"); ("_makeList", _makeList)
-          ; ("_makeInt", todoObj "_makeInt"); ("_makeMap", _makeMap)
-          ; ("false", boolObj false); ("null", nullObj)
-          ; ("_makeSourceSpan", todoObj "_makeSourceSpan")
-          ; ("_makeStr", todoObj "_makeStr")
-          ; ("_makeVarSlot", todoObj "_makeVarSlot"); ("M", todoObj "M")
-          ; ("_slotToBinding", todoObj "_slotToBinding")
-          ; ("loadMAST", todoObj "loadMAST")
-          ; ("makeLazySlot", todoObj "makeLazySlot")
-          ; ("promiseAllFulfilled", todoObj "promiseAllFulfilled")
-          ; ("throw", throwObj); ("Any", todoGuardObj "Any")
-          ; ("traceln", traceObj "\n"); ("M", todoObj "M")
-          ; ("true", boolObj true); ("trace", traceObj "")
-          ; ( "typhonAstBuilder"
-            , todoObj "typhonAstBuilder" (* XXX typhon objects? *) )
-          ; ("typhonAstEval", todoObj "typhonAstEval" (* XXX typhon objects? *))
-          ]))
-
 let calling verb args namedArgs target = call_exn target verb args namedArgs
 let get = calling "get" [] []
 let prettyPrint formatter obj = Format.pp_print_string formatter obj#stringOf
@@ -681,6 +642,45 @@ let unwrapList specimen =
   match specimen#unwrap with
   | Some (MList l) -> l
   | _ -> raise (MonteException (WrongType (MList [], specimen)))
+
+let safeScope =
+  Dict.of_seq
+    (List.to_seq
+       (List.map
+          (fun (k, v) -> (k, bindingObj (finalSlotObj v)))
+          [ ("Bool", dataGuardObj (MBool true)); ("Bytes", todoGuardObj "Bytes")
+          ; ("Char", dataGuardObj (MChar 32))
+          ; ("DeepFrozen", todoGuardObj "DeepFrozen")
+          ; ("DeepFrozenStamp", todoGuardObj "DeepFrozenStamp")
+          ; ("Double", dataGuardObj (MDouble 1.0))
+          ; ("Infinity", doubleObj infinity); ("NaN", doubleObj nan)
+          ; ("Int", dataGuardObj (MInt Z.zero)); ("Near", todoGuardObj "Near")
+          ; ("Same", todoGuardObj "Same"); ("Ref", todoObj "Ref")
+          ; ("astEval", todoObj "astEval")
+          ; ("Selfless", todoGuardObj "Selfless"); ("Str", todoGuardObj "Str")
+          ; ("SubrangeGuard", todoGuardObj "SubrangeGuard")
+          ; ("Void", voidGuardObj); ("_auditedBy", todoObj "_auditedBy")
+          ; ("_equalizer", todoObj "_equalizer"); ("_loop", _loop)
+          ; ("_makeBytes", todoObj "_makeBytes")
+          ; ("_makeDouble", todoObj "_makeDouble")
+          ; ("_makeFinalSlot", todoObj "_makeFinalSlot")
+          ; ("_makeInt", todoObj "_makeInt"); ("_makeList", _makeList)
+          ; ("_makeInt", todoObj "_makeInt"); ("_makeMap", _makeMap)
+          ; ("false", boolObj false); ("null", nullObj)
+          ; ("_makeSourceSpan", todoObj "_makeSourceSpan")
+          ; ("_makeStr", todoObj "_makeStr")
+          ; ("_makeVarSlot", todoObj "_makeVarSlot"); ("M", todoObj "M")
+          ; ("_slotToBinding", todoObj "_slotToBinding")
+          ; ("loadMAST", todoObj "loadMAST")
+          ; ("makeLazySlot", todoObj "makeLazySlot")
+          ; ("promiseAllFulfilled", todoObj "promiseAllFulfilled")
+          ; ("throw", throwObj); ("Any", todoGuardObj "Any")
+          ; ("traceln", traceObj "\n"); ("M", todoObj "M")
+          ; ("true", boolObj true); ("trace", traceObj "")
+          ; ( "typhonAstBuilder"
+            , todoObj "typhonAstBuilder" (* XXX typhon objects? *) )
+          ; ("typhonAstEval", todoObj "typhonAstEval" (* XXX typhon objects? *))
+          ]))
 
 let const k _ = k
 
