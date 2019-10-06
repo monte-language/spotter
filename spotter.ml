@@ -714,15 +714,6 @@ module MASTContext (Monte : MAST) = struct
     | HMeth of Monte.meth
     | HMatch of Monte.matcher
 
-  let v4 ic =
-    let i1 = input_varint ic in
-    let i2 = input_varint ic in
-    let i3 = input_varint ic in
-    let i4 = input_varint ic in
-    Printf.printf "i4:%s,%s,%s,%s\n" (Z.to_string i1) (Z.to_string i2)
-      (Z.to_string i3) (Z.to_string i4) ;
-    (i1, i2, i3, i4)
-
   let logged label ch =
     Printf.printf "%s%c..." label ch ;
     ch
@@ -736,6 +727,12 @@ module MASTContext (Monte : MAST) = struct
       val patts = backlist ()
 
       method private eat_span ic =
+        let v4 ic =
+          let i1 = input_varint ic in
+          let i2 = input_varint ic in
+          let i3 = input_varint ic in
+          let i4 = input_varint ic in
+          (i1, i2, i3, i4) in
         match input_char ic with
         | 'S' -> Monte.oneToOne (v4 ic)
         | 'B' -> Monte.blob (v4 ic)
