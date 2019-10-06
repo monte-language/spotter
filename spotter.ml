@@ -818,16 +818,17 @@ module Compiler = struct
                       None (* refused. XXX matchers *)
                   | Some (params, nParams, body) ->
                       let exit = throwObj in
-                      (* XXX bind namePatt to self *)
                       (* XXX duplicate code with listPatt, refactor! *)
                       let env' =
                         List.fold_left2
                           (fun ma p s -> State.and_then ma (p s exit))
                           (State.return ()) params args in
+                      let env'' =
+                        State.and_then (namePatt self throwObj) env' in
                       Printf.printf "\n(executing %s(" verb ;
                       List.iter (fun a -> Printf.printf "%s, " a#stringOf) args ;
                       Printf.printf ") at %s)" (string_of_span span) ;
-                      let o, _ = State.and_then env' body s in
+                      let o, _ = State.and_then env'' body s in
                       Some o
 
                 (* XXX miranda methods *)
