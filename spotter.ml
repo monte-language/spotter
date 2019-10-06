@@ -33,37 +33,6 @@ let to_monte
       ; .. >) : monte =
   (m :> monte)
 
-module State : sig
-  type ('a, 's) t = 's -> 'a * 's
-
-  val run : ('a, 's) t -> 's -> 'a * 's
-  val return : 'a -> ('a, 's) t
-  val map : ('a -> 'b) -> ('a, 's) t -> ('b, 's) t
-  val bind : ('a, 's) t -> ('a -> ('b, 's) t) -> ('b, 's) t
-  val and_then : (unit, 's) t -> ('a, 's) t -> ('a, 's) t
-  val get : ('s, 's) t
-  val set : 's -> (unit, 's) t
-  val modify : ('s -> 's) -> (unit, 's) t
-end = struct
-  type ('a, 's) t = 's -> 'a * 's
-
-  let run ma = ma
-  let return x s = (x, s)
-
-  let map f ma s =
-    let x, s' = ma s in
-    (f x, s')
-
-  let bind ma f s =
-    let x, s' = ma s in
-    f x s'
-
-  let and_then ma mb = bind ma (fun () -> mb)
-  let get s = (s, s)
-  let set s _ = ((), s)
-  let modify f s = ((), f s)
-end
-
 module UTF8D = struct
   (** `decode bs` gives either Ok (code, rest) or Error (consumed_bytes, rest) *)
   let decode1 (bs : int Seq.t) : (int * int Seq.t, int list * int Seq.t) result
