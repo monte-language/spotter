@@ -553,7 +553,7 @@ module Compiler = struct
             ( object (self)
                 (* XXX method dispatch, matcher dispatch *)
                 method call verb args namedArgs : monte option =
-                  Printf.printf "call: %s/%d" verb (List.length args) ;
+                  Printf.printf "(call: %s/%d)" verb (List.length args) ;
                   match
                     AtomDict.find_opt (verb, List.length args) methdict
                   with
@@ -568,7 +568,9 @@ module Compiler = struct
                         List.fold_left2
                           (fun ma p s -> State.and_then ma (p s exit))
                           (State.return ()) params args in
-                      Printf.printf "executing %s" verb ;
+                      Printf.printf "(executing %s(" verb ;
+                      List.iter (fun a -> Printf.printf "%s, " a#stringOf) args ;
+                      Printf.printf ") at %s)" (string_of_span span) ;
                       let o, _ = State.and_then env' body s in
                       Some o
 
@@ -655,6 +657,7 @@ module Compiler = struct
 
   let finalPatt noun guard span specimen exit =
     State.bind (coerceOpt guard specimen exit) (fun s ->
+        Printf.printf "(finalPatt: %s := %s)" noun s#stringOf ;
         (* XXX guards *)
         State.modify (Dict.add noun (bindingObj (finalSlotObj s))))
 
@@ -720,7 +723,7 @@ module MASTContext (Monte : MAST) = struct
     | HMatch of Monte.matcher
 
   let logged label ch =
-    Printf.printf "%s%c..." label ch ;
+    (* XXX Printf.printf "%s%c..." label ch; *)
     ch
 
   let make () =
