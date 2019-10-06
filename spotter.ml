@@ -283,42 +283,6 @@ let rec strObj s : monte =
     method unwrap = Some (MStr s)
   end
 
-let flexListObj (init : monte list) : monte =
-  object
-    val mutable items = init
-
-    method call verb args nargs = None
-
-    (* XXX *)
-    method stringOf = "<FlexList>"
-
-    method unwrap = None
-  end
-
-let rec listObj l : monte =
-  object
-    method call verb args namedArgs =
-      match (verb, args) with
-      | "diverge", [] -> Some (flexListObj l)
-      | "size", [] -> Some (intObj (Z.of_int (List.length l)))
-      | _ -> None
-
-    method stringOf =
-      "[" ^ String.concat " " (List.map (fun o -> o#stringOf) l) ^ "]"
-
-    method unwrap = Some (MList l)
-  end
-
-let _makeList : monte =
-  object
-    method call verb args namedArgs =
-      match verb with "run" -> Some (listObj args) | _ -> None
-
-    method stringOf = "_makeList"
-
-    method unwrap = None
-  end
-
 let bindingObj slot : monte =
   object
     method call verb args namedArgs =
@@ -497,7 +461,40 @@ let flexMapObj (init : (monte * monte) list) : monte =
     method unwrap = None
   end
 
-let mapObj (pairs : (monte * monte) list) : monte =
+let rec listObj l : monte =
+  object
+    method call verb args namedArgs =
+      match (verb, args) with
+      | "asMap", [] when l = [] -> Some (mapObj [])
+      | "diverge", [] -> Some (flexListObj l)
+      | "size", [] -> Some (intObj (Z.of_int (List.length l)))
+      | _ -> None
+
+    method stringOf =
+      "[" ^ String.concat " " (List.map (fun o -> o#stringOf) l) ^ "]"
+
+    method unwrap = Some (MList l)
+  end
+
+and flexListObj (init : monte list) : monte =
+  object
+    val mutable items = init
+
+    method call verb args nargs =
+      match (verb, args) with
+      | "push", [item] ->
+          items <- item :: items ;
+          Some nullObj
+      | "snapshot", [] -> Some (listObj items)
+      | _ -> None
+
+    (* XXX *)
+    method stringOf = "<FlexList>"
+
+    method unwrap = None
+  end
+
+and mapObj (pairs : (monte * monte) list) : monte =
   (* XXX make sure ej doesn't return. *)
   let throwStr ej msg = call_exn ej "run" [strObj msg] [] in
   (* An iterator on a map, producing its keys and values. *)
@@ -524,6 +521,8 @@ let mapObj (pairs : (monte * monte) list) : monte =
     method call (verb : string) (args : monte list) namedArgs : monte option =
       match (verb, args) with
       | "diverge", [] -> Some (flexMapObj pairs)
+      | "getKeys", [] -> Some (listObj (List.map fst pairs))
+      | "getValues", [] -> Some (listObj (List.map snd pairs))
       | "_makeIterator", [] -> Some (_makeIterator ())
       | _ ->
           Printf.printf "\nXXX Map verb todo? %s\n" verb ;
@@ -538,26 +537,49 @@ let mapObj (pairs : (monte * monte) list) : monte =
     (* XXX? Map unwrap? *)
   end
 
+let _makeList : monte =
+  object
+    method call verb args namedArgs =
+      match verb with "run" -> Some (listObj args) | _ -> None
+
+    method stringOf = "_makeList"
+
+    method unwrap = None
+  end
+
+let unwrapList specimen =
+  match specimen#unwrap with
+  | Some (MList l) -> l
+  | _ -> raise (MonteException (WrongType (MList [], specimen)))
+
+let unwrapBool specimen =
+  match specimen#unwrap with
+  | Some (MBool b) -> b
+  | _ -> raise (MonteException (WrongType (MBool true, specimen)))
+
+let unwrapStr specimen : string =
+  match specimen#unwrap with
+  | Some (MStr s) -> s
+  | _ -> raise (MonteException (WrongType (MStr "", specimen)))
+
 let _makeMap : monte =
   object
     method call verb (args : monte list) namedArgs : monte option =
       match (verb, args) with
-      | "fromPairs", [pairsObj] -> (
-        match pairsObj#unwrap with
-        | Some (MList pairsList) ->
-            let pairs =
-              List.map
-                (fun itemObj ->
-                  match itemObj#unwrap with
-                  | Some (MList [k; v]) -> (k, v)
-                  | _ ->
-                      raise
-                        (MonteException
-                           (WrongType
-                              (MList [strObj "key"; strObj "val"], itemObj))))
-                pairsList in
-            Some (mapObj pairs)
-        | _ -> raise (MonteException (WrongType (MList [], pairsObj))) )
+      | "fromPairs", [pairsObj] ->
+          let unwrapPair (itemList : monte list) =
+            match itemList with
+            | [k; v] -> (k, v)
+            | _ ->
+                raise
+                  (MonteException
+                     (WrongType
+                        (MList [strObj "key"; strObj "val"], listObj itemList)))
+          in
+          let pairs =
+            List.map unwrapPair (List.map unwrapList (unwrapList pairsObj))
+          in
+          Some (mapObj pairs)
       | _ -> None
 
     method stringOf = "_makeMap"
@@ -638,16 +660,6 @@ let ejectTo span =
       method unwrap = None
     end in
   (to_monte ej, fun () -> ej#disable)
-
-let unwrapBool specimen =
-  match specimen#unwrap with
-  | Some (MBool b) -> b
-  | _ -> raise (MonteException (WrongType (MBool true, specimen)))
-
-let unwrapList specimen =
-  match specimen#unwrap with
-  | Some (MList l) -> l
-  | _ -> raise (MonteException (WrongType (MList [], specimen)))
 
 let _loop : monte =
   object
