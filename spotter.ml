@@ -266,7 +266,6 @@ let rec strObj s : monte =
       | "size", [] -> Some (intObj (Z.of_int (UTF8.length s)))
       | _ -> None
 
-    (* XXX needs quotes and escapes *)
     method stringOf =
       let parts =
         List.map
