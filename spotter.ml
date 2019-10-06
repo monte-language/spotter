@@ -14,6 +14,16 @@ and monteprim =
   | MStr of string
   | MList of monte list
 
+let prim_name p =
+  match p with
+  | MNull -> "Null"
+  | MBool _ -> "Bool"
+  | MChar _ -> "Char"
+  | MDouble _ -> "Double"
+  | MInt _ -> "Int"
+  | MStr _ -> "Str"
+  | MList _ -> "List"
+
 (* Narrowing: Cast away extra non-private methods of Monte objects. *)
 let to_monte
     (m :
@@ -200,21 +210,21 @@ let boolObj b : monte =
     method unwrap = Some (MBool b)
   end
 
+let char_lit c =
+  match c with
+  | _ when c > 0xffff -> Printf.sprintf "\\U%08x" c
+  | _ when c > 0x7f -> Printf.sprintf "\\u%04x" c
+  | _ when c < 0x20 -> Printf.sprintf "\\u%04x" c
+  | _ when c = Char.code '\\' -> "\"\\\""
+  | _ when c = Char.code '\"' -> "\"\"\""
+  | _ -> Char.escaped (char_of_int c)
+
 let charObj (c : int) : monte =
   object
     method call verb args namedArgs = match (verb, args) with _ -> None
 
-    method stringOf =
-      let body =
-        match c with
-        | _ when c > 0xffff -> Printf.sprintf "\\U%08x" c
-        | _ when c > 0x7f -> Printf.sprintf "\\u%04x" c
-        | _ when c < 0x20 -> Printf.sprintf "\\u%04x" c
-        | _ when c = Char.code '\\' -> "\"\\\""
-        | _ when c = Char.code '\"' -> "\"\"\""
-        | _ -> Char.escaped (char_of_int c) in
-      (* XXX quotes? *)
-      "'" ^ body ^ "'"
+    (* XXX quotes? *)
+    method stringOf = "'" ^ char_lit c ^ "'"
 
     method unwrap = Some (MChar c)
   end
@@ -251,38 +261,26 @@ let rec intObj i : monte =
 
 let rec strObj s : monte =
   object
-    method call verb args namedArgs =
+    method call verb (args : monte list) namedArgs : monte option =
       match (verb, args) with
+      | "add", [otherObj] -> (
+        match otherObj#unwrap with
+        | Some (MStr other) -> Some (strObj (s ^ other))
+        | Some (MChar other) ->
+            let utf8 code = String.make 0 (Char.chr code) (* XXX *) in
+            Some (strObj (s ^ utf8 other))
+        | _ -> None (* WrongType? fwd ref *) )
       | "size", [] -> Some (intObj (Z.of_int (UTF8.length s)))
       | _ -> None
 
-    (* XXX needs quotes and escapes *)
-    method stringOf = s
+    method stringOf =
+      let parts =
+        List.map
+          (fun ch -> char_lit (Char.code ch))
+          (List.of_seq (String.to_seq s)) in
+      "\"" ^ String.concat "" parts ^ "\""
 
     method unwrap = Some (MStr s)
-  end
-
-let rec listObj l : monte =
-  object
-    method call verb args namedArgs =
-      match (verb, args) with
-      | "size", [] -> Some (intObj (Z.of_int (List.length l)))
-      | _ -> None
-
-    method stringOf =
-      "[" ^ String.concat " " (List.map (fun o -> o#stringOf) l) ^ "]"
-
-    method unwrap = Some (MList l)
-  end
-
-let _makeList : monte =
-  object
-    method call verb args namedArgs =
-      match verb with "run" -> Some (listObj args) | _ -> None
-
-    method stringOf = "_makeList"
-
-    method unwrap = None
   end
 
 let bindingObj slot : monte =
@@ -350,16 +348,8 @@ let string_of_mexn m =
   | DoubleThrown ->
       "An ejector has come forward with a complaint of being thrown...twice!"
   | WrongType (expected, actual) ->
-      let prim_type =
-        match expected with
-        | MNull -> "Null"
-        | MBool _ -> "Bool"
-        | MChar _ -> "Char"
-        | MDouble _ -> "Double"
-        | MInt _ -> "Int"
-        | MStr _ -> "Str"
-        | MList _ -> "List" in
-      "Wrong type while unwrapping " ^ prim_type ^ ": " ^ actual#stringOf
+      "Wrong type while unwrapping " ^ prim_name expected ^ ": "
+      ^ actual#stringOf
   | NameError (name, span) ->
       "name error at " ^ string_of_span span ^ ": " ^ name
   | MissingNamedArg (k, span) ->
@@ -409,6 +399,42 @@ let call_exn target verb args namedArgs : monte =
           (MonteException
              (Refused (target, verb, args, List.map fst namedArgs))) )
 
+let dataGuardObj example : monte =
+  let name = prim_name example in
+  object
+    method call verb args nargs =
+      match (verb, args) with
+      | "coerce", [specimen; exit] -> (
+        match specimen#unwrap with
+        | Some sp when prim_name sp = name -> Some specimen
+        | _ ->
+            Some
+              (call_exn exit "run"
+                 [strObj (specimen#stringOf ^ "does not conform to " ^ name)]
+                 []) )
+      | _, _ -> None
+
+    method stringOf = name
+
+    method unwrap = None
+  end
+
+let voidGuardObj : monte =
+  object
+    method call verb args nargs =
+      match (verb, args) with
+      | "coerce", [specimen; exit] ->
+          Some
+            (call_exn exit "run"
+               [strObj (specimen#stringOf ^ "does not conform to Void")]
+               [])
+      | _, _ -> None
+
+    method stringOf = "Void"
+
+    method unwrap = None
+  end
+
 let todoGuardObj name : monte =
   object
     method call verb args nargs =
@@ -423,16 +449,168 @@ let todoGuardObj name : monte =
     method unwrap = None
   end
 
-let safeScope =
-  Dict.of_seq
-    (List.to_seq
-       (List.map
-          (fun (k, v) -> (k, bindingObj (finalSlotObj v)))
-          [ ("null", nullObj); ("true", boolObj true); ("false", boolObj false)
-          ; ("_makeList", _makeList); ("throw", throwObj)
-          ; ("DeepFrozen", todoGuardObj "DeepFrozen")
-          ; ("DeepFrozenStamp", todoGuardObj "DeepFrozenStamp")
-          ; ("Str", todoGuardObj "Str") ]))
+let flexMapObj (init : (monte * monte) list) : monte =
+  object
+    val mutable pairs = init
+
+    method call verb args nargs = None
+
+    (* XXX *)
+    method stringOf = "<FlexMap>"
+
+    method unwrap = None
+  end
+
+let rec listObj l : monte =
+  object
+    method call verb args namedArgs =
+      match (verb, args) with
+      | "asMap", [] when l = [] -> Some (mapObj [])
+      | "diverge", [] -> Some (flexListObj l)
+      | "size", [] -> Some (intObj (Z.of_int (List.length l)))
+      | _ -> None
+
+    method stringOf =
+      "[" ^ String.concat " " (List.map (fun o -> o#stringOf) l) ^ "]"
+
+    method unwrap = Some (MList l)
+  end
+
+and flexListObj (init : monte list) : monte =
+  object
+    val mutable items = init
+
+    method call verb args nargs =
+      match (verb, args) with
+      | "push", [item] ->
+          items <- item :: items ;
+          Some nullObj
+      | "snapshot", [] -> Some (listObj items)
+      | _ -> None
+
+    (* XXX *)
+    method stringOf = "<FlexList>"
+
+    method unwrap = None
+  end
+
+and mapObj (pairs : (monte * monte) list) : monte =
+  (* XXX make sure ej doesn't return. *)
+  let throwStr ej msg = call_exn ej "run" [strObj msg] [] in
+  (* An iterator on a map, producing its keys and values. *)
+  let _makeIterator () =
+    object
+      val mutable _index = 0
+
+      method call verb args nargs =
+        match (verb, args) with
+        | "next", [ej] ->
+            if _index < List.length pairs then (
+              let k, v = List.nth pairs _index in
+              let rv = listObj [k; v] in
+              _index <- _index + 1 ;
+              Some rv )
+            else Some (throwStr ej "next/1: Iterator exhausted")
+        | _ -> None
+
+      method stringOf = "<mapIterator>"
+
+      method unwrap = None
+    end in
+  object
+    method call (verb : string) (args : monte list) namedArgs : monte option =
+      match (verb, args) with
+      | "diverge", [] -> Some (flexMapObj pairs)
+      | "getKeys", [] -> Some (listObj (List.map fst pairs))
+      | "getValues", [] -> Some (listObj (List.map snd pairs))
+      | "_makeIterator", [] -> Some (_makeIterator ())
+      | _ ->
+          Printf.printf "\nXXX Map verb todo? %s\n" verb ;
+          None
+
+    method stringOf =
+      let item (k, v) = String.concat " => " [k#stringOf; v#stringOf] in
+      let items = String.concat ", " (List.map item pairs) in
+      "[" ^ items ^ "]"
+
+    method unwrap = None
+    (* XXX? Map unwrap? *)
+  end
+
+let _makeList : monte =
+  object
+    method call verb args namedArgs =
+      match verb with "run" -> Some (listObj args) | _ -> None
+
+    method stringOf = "_makeList"
+
+    method unwrap = None
+  end
+
+let unwrapList specimen =
+  match specimen#unwrap with
+  | Some (MList l) -> l
+  | _ -> raise (MonteException (WrongType (MList [], specimen)))
+
+let unwrapBool specimen =
+  match specimen#unwrap with
+  | Some (MBool b) -> b
+  | _ -> raise (MonteException (WrongType (MBool true, specimen)))
+
+let unwrapStr specimen : string =
+  match specimen#unwrap with
+  | Some (MStr s) -> s
+  | _ -> raise (MonteException (WrongType (MStr "", specimen)))
+
+let _makeMap : monte =
+  object
+    method call verb (args : monte list) namedArgs : monte option =
+      match (verb, args) with
+      | "fromPairs", [pairsObj] ->
+          let unwrapPair (itemList : monte list) =
+            match itemList with
+            | [k; v] -> (k, v)
+            | _ ->
+                raise
+                  (MonteException
+                     (WrongType
+                        (MList [strObj "key"; strObj "val"], listObj itemList)))
+          in
+          let pairs =
+            List.map unwrapPair (List.map unwrapList (unwrapList pairsObj))
+          in
+          Some (mapObj pairs)
+      | _ -> None
+
+    method stringOf = "_makeMap"
+
+    method unwrap = None
+  end
+
+let todoObj name : monte =
+  object
+    method call verb args nargs = None
+
+    method stringOf = name
+
+    method unwrap = None
+  end
+
+let traceObj suffix : monte =
+  object
+    method call verb args nargs =
+      match verb with
+      | "run" ->
+          Printf.printf " ~ " ;
+          List.iter (fun obj -> Printf.printf "%s, " obj#stringOf) args ;
+          Printf.printf "%s" suffix ;
+          Some nullObj
+      | _ -> None
+
+    method stringOf = "trace"
+
+    method unwrap = None
+  end
 
 let calling verb args namedArgs target = call_exn target verb args namedArgs
 let get = calling "get" [] []
@@ -483,15 +661,79 @@ let ejectTo span =
     end in
   (to_monte ej, fun () -> ej#disable)
 
-let unwrapBool specimen =
-  match specimen#unwrap with
-  | Some (MBool b) -> b
-  | _ -> raise (MonteException (WrongType (MBool true, specimen)))
+let _loop : monte =
+  object
+    method call verb (args : monte list) nargs =
+      let run iterable consumer : monte =
+        let iterator = call_exn iterable "_makeIterator" [] [] in
+        let no_span : mspan = Blob (Z.zero, Z.zero, Z.zero, Z.zero) in
+        let ej, _ = ejectTo no_span in
+        let rec next () =
+          try
+            let values = call_exn iterator "next" [ej] [] in
+            ignore (call_exn consumer "run" (unwrapList values) []) ;
+            next ()
+          with MonteException (Ejecting (e, _)) as ex ->
+            if e == ej then nullObj else raise ex in
+        next () in
+      match (verb, args) with
+      | "run", [iterable; consumer] -> Some (run iterable consumer)
+      | _ -> None
 
-let unwrapList specimen =
-  match specimen#unwrap with
-  | Some (MList l) -> l
-  | _ -> raise (MonteException (WrongType (MList [], specimen)))
+    method stringOf = "_loop"
+
+    method unwrap = None
+  end
+
+let makeScope (pairs : (string * monte) list) : monte Dict.t =
+  Dict.of_seq
+    (List.to_seq
+       (List.map (fun (k, v) -> (k, bindingObj (finalSlotObj v))) pairs))
+
+let unwrapScope obj =
+  let no_amp s =
+    String.(if sub s 0 2 = "&&" then sub s 2 (length s - 2) else s) in
+  let keys =
+    List.map
+      (fun o -> no_amp (unwrapStr o))
+      (unwrapList (call_exn obj "getKeys" [] [])) in
+  let values = unwrapList (call_exn obj "getValues" [] []) in
+  let items = List.combine keys values in
+  Dict.of_seq (List.to_seq items)
+
+let safeScope =
+  makeScope
+    [ ("Bool", dataGuardObj (MBool true)); ("Bytes", todoGuardObj "Bytes")
+    ; ("Char", dataGuardObj (MChar 32))
+    ; ("DeepFrozen", todoGuardObj "DeepFrozen")
+    ; ("DeepFrozenStamp", todoGuardObj "DeepFrozenStamp")
+    ; ("Double", dataGuardObj (MDouble 1.0)); ("Infinity", doubleObj infinity)
+    ; ("NaN", doubleObj nan); ("Int", dataGuardObj (MInt Z.zero))
+    ; ("Near", todoGuardObj "Near")
+    ; ("KernelAstStamp", todoObj "KernelAstStamp")
+    ; ("Same", todoGuardObj "Same"); ("Ref", todoObj "Ref")
+    ; ("astEval", todoObj "astEval"); ("Selfless", todoGuardObj "Selfless")
+    ; ("Str", todoGuardObj "Str")
+    ; ("SemitransparentStamp", todoObj "SemitransparentStamp")
+    ; ("SubrangeGuard", todoGuardObj "SubrangeGuard")
+    ; ("TransparentStamp", todoObj "TransparentStamp"); ("Void", voidGuardObj)
+    ; ("_auditedBy", todoObj "_auditedBy"); ("_equalizer", todoObj "_equalizer")
+    ; ("_loop", _loop); ("_makeBytes", todoObj "_makeBytes")
+    ; ("_makeDouble", todoObj "_makeDouble")
+    ; ("_makeFinalSlot", todoObj "_makeFinalSlot")
+    ; ("_makeInt", todoObj "_makeInt"); ("_makeList", _makeList)
+    ; ("_makeInt", todoObj "_makeInt"); ("_makeMap", _makeMap)
+    ; ("false", boolObj false); ("null", nullObj)
+    ; ("_makeSourceSpan", todoObj "_makeSourceSpan")
+    ; ("_makeStr", todoObj "_makeStr"); ("_makeVarSlot", todoObj "_makeVarSlot")
+    ; ("M", todoObj "M"); ("_slotToBinding", todoObj "_slotToBinding")
+    ; ("loadMAST", todoObj "loadMAST"); ("makeLazySlot", todoObj "makeLazySlot")
+    ; ("promiseAllFulfilled", todoObj "promiseAllFulfilled")
+    ; ("throw", throwObj); ("Any", todoGuardObj "Any")
+    ; ("traceln", traceObj "\n"); ("M", todoObj "M"); ("true", boolObj true)
+    ; ("trace", traceObj "")
+    ; ("typhonAstBuilder", todoObj "typhonAstBuilder" (* XXX typhon objects? *))
+    ; ("typhonAstEval", todoObj "typhonAstEval" (* XXX typhon objects? *)) ]
 
 let const k _ = k
 
@@ -605,16 +847,17 @@ module Compiler = struct
                       None (* refused. XXX matchers *)
                   | Some (params, nParams, body) ->
                       let exit = throwObj in
-                      (* XXX bind namePatt to self *)
                       (* XXX duplicate code with listPatt, refactor! *)
                       let env' =
                         List.fold_left2
                           (fun ma p s -> State.and_then ma (p s exit))
                           (State.return ()) params args in
-                      Printf.printf "(executing %s(" verb ;
+                      let env'' =
+                        State.and_then (namePatt self throwObj) env' in
+                      Printf.printf "\n(executing %s(" verb ;
                       List.iter (fun a -> Printf.printf "%s, " a#stringOf) args ;
                       Printf.printf ") at %s)" (string_of_span span) ;
-                      let o, _ = State.and_then env' body s in
+                      let o, _ = State.and_then env'' body s in
                       Some o
 
                 (* XXX miranda methods *)
@@ -961,21 +1204,43 @@ end
 
 module M = MASTContext (Compiler)
 
-let read_mast filename : Compiler.t =
-  let ic = open_in_mast filename in
-  let context = M.make () in
-  let rv = context#eat_last_expr ic in
-  close_in ic ; rv
+let load read_mast (filename : string) (scope : monte Dict.t) : monte =
+  Printf.printf "%s: read mast\n" filename ;
+  let expr = read_mast filename in
+  Printf.printf "%s: evaluate module\n" filename ;
+  let mmod, _ = expr scope in
+  Printf.printf "=mod=> %s\n" mmod#stringOf ;
+  mmod
 
+let getMonteFileObj read_mast : monte =
+  object
+    method call verb (args : monte list) nargs =
+      match (verb, args) with
+      | "run", [filenameObj; scopeObj] ->
+          let filename = unwrapStr filenameObj ^ ".mast" in
+          Some (load read_mast filename (unwrapScope scopeObj))
+      | _ -> None
+
+    method stringOf = "<getMonteFile>"
+
+    method unwrap = None
+  end
+
+(* limit use of ambient authority to this top-level expression. *)
 let () =
+  let read_mast filename : Compiler.t =
+    let ic = open_in_mast filename in
+    let context = M.make () in
+    let rv = context#eat_last_expr ic in
+    close_in ic ; rv in
+  let ioScope : monte Dict.t =
+    let pick k x y = None in
+    Dict.union pick safeScope
+      (makeScope [("getMonteFile", getMonteFileObj read_mast)]) in
   for i = 1 to Array.length Sys.argv - 1 do
     let filename = Sys.argv.(i) in
-    Printf.printf "[%i] %s: read mast\n" i filename ;
-    let expr = read_mast filename in
     try
-      Printf.printf "[%i] %s: evaluate module\n" i filename ;
-      let mmod, _ = expr safeScope in
-      Printf.printf "=mod=> %s\n" mmod#stringOf ;
+      let mmod = load read_mast filename ioScope in
       Printf.printf "[%i] %s: run module\n" i filename ;
       let result = call_exn mmod "run" [loaderObj] [] in
       Printf.printf "=out=> %s\n" result#stringOf
