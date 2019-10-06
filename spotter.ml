@@ -261,8 +261,15 @@ let rec intObj i : monte =
 
 let rec strObj s : monte =
   object
-    method call verb args namedArgs =
+    method call verb (args : monte list) namedArgs : monte option =
       match (verb, args) with
+      | "add", [otherObj] -> (
+        match otherObj#unwrap with
+        | Some (MStr other) -> Some (strObj (s ^ other))
+        | Some (MChar other) ->
+            let utf8 code = String.make 0 (Char.chr code) (* XXX *) in
+            Some (strObj (s ^ utf8 other))
+        | _ -> None (* WrongType? fwd ref *) )
       | "size", [] -> Some (intObj (Z.of_int (UTF8.length s)))
       | _ -> None
 
