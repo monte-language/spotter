@@ -685,44 +685,55 @@ let _loop : monte =
     method unwrap = None
   end
 
-let safeScope =
+let makeScope (pairs : (string * monte) list) : monte Dict.t =
   Dict.of_seq
     (List.to_seq
-       (List.map
-          (fun (k, v) -> (k, bindingObj (finalSlotObj v)))
-          [ ("Bool", dataGuardObj (MBool true)); ("Bytes", todoGuardObj "Bytes")
-          ; ("Char", dataGuardObj (MChar 32))
-          ; ("DeepFrozen", todoGuardObj "DeepFrozen")
-          ; ("DeepFrozenStamp", todoGuardObj "DeepFrozenStamp")
-          ; ("Double", dataGuardObj (MDouble 1.0))
-          ; ("Infinity", doubleObj infinity); ("NaN", doubleObj nan)
-          ; ("Int", dataGuardObj (MInt Z.zero)); ("Near", todoGuardObj "Near")
-          ; ("Same", todoGuardObj "Same"); ("Ref", todoObj "Ref")
-          ; ("astEval", todoObj "astEval")
-          ; ("Selfless", todoGuardObj "Selfless"); ("Str", todoGuardObj "Str")
-          ; ("SubrangeGuard", todoGuardObj "SubrangeGuard")
-          ; ("Void", voidGuardObj); ("_auditedBy", todoObj "_auditedBy")
-          ; ("_equalizer", todoObj "_equalizer"); ("_loop", _loop)
-          ; ("_makeBytes", todoObj "_makeBytes")
-          ; ("_makeDouble", todoObj "_makeDouble")
-          ; ("_makeFinalSlot", todoObj "_makeFinalSlot")
-          ; ("_makeInt", todoObj "_makeInt"); ("_makeList", _makeList)
-          ; ("_makeInt", todoObj "_makeInt"); ("_makeMap", _makeMap)
-          ; ("false", boolObj false); ("null", nullObj)
-          ; ("_makeSourceSpan", todoObj "_makeSourceSpan")
-          ; ("_makeStr", todoObj "_makeStr")
-          ; ("_makeVarSlot", todoObj "_makeVarSlot"); ("M", todoObj "M")
-          ; ("_slotToBinding", todoObj "_slotToBinding")
-          ; ("loadMAST", todoObj "loadMAST")
-          ; ("makeLazySlot", todoObj "makeLazySlot")
-          ; ("promiseAllFulfilled", todoObj "promiseAllFulfilled")
-          ; ("throw", throwObj); ("Any", todoGuardObj "Any")
-          ; ("traceln", traceObj "\n"); ("M", todoObj "M")
-          ; ("true", boolObj true); ("trace", traceObj "")
-          ; ( "typhonAstBuilder"
-            , todoObj "typhonAstBuilder" (* XXX typhon objects? *) )
-          ; ("typhonAstEval", todoObj "typhonAstEval" (* XXX typhon objects? *))
-          ]))
+       (List.map (fun (k, v) -> (k, bindingObj (finalSlotObj v))) pairs))
+
+let unwrapScope obj =
+  let no_amp s =
+    String.(if sub s 0 2 = "&&" then sub s 2 (length s - 2) else s) in
+  let keys =
+    List.map
+      (fun o -> no_amp (unwrapStr o))
+      (unwrapList (call_exn obj "getKeys" [] [])) in
+  let values = unwrapList (call_exn obj "getValues" [] []) in
+  let items = List.combine keys values in
+  Dict.of_seq (List.to_seq items)
+
+let safeScope =
+  makeScope
+    [ ("Bool", dataGuardObj (MBool true)); ("Bytes", todoGuardObj "Bytes")
+    ; ("Char", dataGuardObj (MChar 32))
+    ; ("DeepFrozen", todoGuardObj "DeepFrozen")
+    ; ("DeepFrozenStamp", todoGuardObj "DeepFrozenStamp")
+    ; ("Double", dataGuardObj (MDouble 1.0)); ("Infinity", doubleObj infinity)
+    ; ("NaN", doubleObj nan); ("Int", dataGuardObj (MInt Z.zero))
+    ; ("Near", todoGuardObj "Near")
+    ; ("KernelAstStamp", todoObj "KernelAstStamp")
+    ; ("Same", todoGuardObj "Same"); ("Ref", todoObj "Ref")
+    ; ("astEval", todoObj "astEval"); ("Selfless", todoGuardObj "Selfless")
+    ; ("Str", todoGuardObj "Str")
+    ; ("SemitransparentStamp", todoObj "SemitransparentStamp")
+    ; ("SubrangeGuard", todoGuardObj "SubrangeGuard")
+    ; ("TransparentStamp", todoObj "TransparentStamp"); ("Void", voidGuardObj)
+    ; ("_auditedBy", todoObj "_auditedBy"); ("_equalizer", todoObj "_equalizer")
+    ; ("_loop", _loop); ("_makeBytes", todoObj "_makeBytes")
+    ; ("_makeDouble", todoObj "_makeDouble")
+    ; ("_makeFinalSlot", todoObj "_makeFinalSlot")
+    ; ("_makeInt", todoObj "_makeInt"); ("_makeList", _makeList)
+    ; ("_makeInt", todoObj "_makeInt"); ("_makeMap", _makeMap)
+    ; ("false", boolObj false); ("null", nullObj)
+    ; ("_makeSourceSpan", todoObj "_makeSourceSpan")
+    ; ("_makeStr", todoObj "_makeStr"); ("_makeVarSlot", todoObj "_makeVarSlot")
+    ; ("M", todoObj "M"); ("_slotToBinding", todoObj "_slotToBinding")
+    ; ("loadMAST", todoObj "loadMAST"); ("makeLazySlot", todoObj "makeLazySlot")
+    ; ("promiseAllFulfilled", todoObj "promiseAllFulfilled")
+    ; ("throw", throwObj); ("Any", todoGuardObj "Any")
+    ; ("traceln", traceObj "\n"); ("M", todoObj "M"); ("true", boolObj true)
+    ; ("trace", traceObj "")
+    ; ("typhonAstBuilder", todoObj "typhonAstBuilder" (* XXX typhon objects? *))
+    ; ("typhonAstEval", todoObj "typhonAstEval" (* XXX typhon objects? *)) ]
 
 let const k _ = k
 
@@ -1193,21 +1204,43 @@ end
 
 module M = MASTContext (Compiler)
 
-let read_mast filename : Compiler.t =
-  let ic = open_in_mast filename in
-  let context = M.make () in
-  let rv = context#eat_last_expr ic in
-  close_in ic ; rv
+let load read_mast (filename : string) (scope : monte Dict.t) : monte =
+  Printf.printf "%s: read mast\n" filename ;
+  let expr = read_mast filename in
+  Printf.printf "%s: evaluate module\n" filename ;
+  let mmod, _ = expr scope in
+  Printf.printf "=mod=> %s\n" mmod#stringOf ;
+  mmod
 
+let getMonteFileObj read_mast : monte =
+  object
+    method call verb (args : monte list) nargs =
+      match (verb, args) with
+      | "run", [filenameObj; scopeObj] ->
+          let filename = unwrapStr filenameObj ^ ".mast" in
+          Some (load read_mast filename (unwrapScope scopeObj))
+      | _ -> None
+
+    method stringOf = "<getMonteFile>"
+
+    method unwrap = None
+  end
+
+(* limit use of ambient authority to this top-level expression. *)
 let () =
+  let read_mast filename : Compiler.t =
+    let ic = open_in_mast filename in
+    let context = M.make () in
+    let rv = context#eat_last_expr ic in
+    close_in ic ; rv in
+  let ioScope : monte Dict.t =
+    let pick k x y = None in
+    Dict.union pick safeScope
+      (makeScope [("getMonteFile", getMonteFileObj read_mast)]) in
   for i = 1 to Array.length Sys.argv - 1 do
     let filename = Sys.argv.(i) in
-    Printf.printf "[%i] %s: read mast\n" i filename ;
-    let expr = read_mast filename in
     try
-      Printf.printf "[%i] %s: evaluate module\n" i filename ;
-      let mmod, _ = expr safeScope in
-      Printf.printf "=mod=> %s\n" mmod#stringOf ;
+      let mmod = load read_mast filename ioScope in
       Printf.printf "[%i] %s: run module\n" i filename ;
       let result = call_exn mmod "run" [loaderObj] [] in
       Printf.printf "=out=> %s\n" result#stringOf
