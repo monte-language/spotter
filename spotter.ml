@@ -613,7 +613,6 @@ let traceObj suffix : monte =
   end
 
 let calling verb args namedArgs target = call_exn target verb args namedArgs
-let get = calling "get" [] []
 let prettyPrint formatter obj = Format.pp_print_string formatter obj#stringOf
 
 let input_varint ic =
@@ -766,6 +765,7 @@ module Compiler = struct
   let strExpr s _ = State.return (strObj s)
 
   let nounExpr n span =
+    let get = calling "get" [] [] in
     State.bind State.get (fun env ->
         match Dict.find_opt n env with
         | Some b -> State.return (get (get b))
@@ -792,9 +792,7 @@ module Compiler = struct
 
   let defExpr patt exitOpt expr span =
     let withOptionalExpr exprOpt d f =
-      match exprOpt with
-      | Some expr -> State.bind expr (fun mv -> f mv)
-      | None -> f d in
+      match exprOpt with Some expr -> State.bind expr f | None -> f d in
     withOptionalExpr exitOpt throwObj (fun exit ->
         State.bind expr (fun e ->
             State.and_then (patt e exit) (State.return e)))
